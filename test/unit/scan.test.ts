@@ -1,0 +1,155 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { resolveConfig } from '../../src/core/config.js';
+import { scanFast, scanFile } from '../../src/scan/fast.js';
+import { scanFull } from '../../src/scan/full.js';
+
+const created: string[] = [];
+const config = resolveConfig({});
+
+function makeRoot(files: Record<string, string>, gitInit = false): string {
+  const root = mkdtempSync(join(tmpdir(), 'crap-detector-scan-'));
+  created.push(root);
+  for (const [rel, content] of Object.entries(files)) {
+    mkdirSync(join(root, dirname(rel)), { recursive: true });
+    writeFileSync(join(root, rel), content, 'utf8');
+  }
+  if (gitInit) {
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+    };
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'test');
+    git('add', '-A');
+    git('commit', '-qm', 'initial');
+  }
+  return root;
+}
+
+afterEach(() => {
+  while (created.length > 0) {
+    rmSync(created.pop() ?? '', { recursive: true, force: true });
+  }
+});
+
+const PROJECT = {
+  'package.json': JSON.stringify({ name: 'fixture', dependencies: {} }),
+  'src/entry.ts': [
+    "import { helper } from './helper.js';",
+    'export const run = (): number => helper(1);',
+  ].join('\n'),
+  'src/helper.ts': [
+    'export function helper(value: any): number {',
+    '  try { return value + 1; } catch (error) {}',
+    '  return 0;',
+    '}',
+  ].join('\n'),
+};
+
+describe('scanFast', () => {
+  it('couvre métriques, slop, imports et graphe en une passe', () => {
+    const result = scanFast(makeRoot(PROJECT), config);
+    expect(result.files).toEqual(['src/entry.ts', 'src/helper.ts']);
+    expect(result.metrics.filesScanned).toBe(2);
+    expect(result.imports.summary.internalEdges).toBe(1);
+    expect(result.dependencies.summary.cycles).toBe(0);
+    expect(result.slop.summary.typeEscapes).toBe(1);
+  });
+
+  it('remplit les agrégats calculables sans git ni outil externe', () => {
+    const result = scanFast(makeRoot(PROJECT), config);
+    expect(Object.keys(result.aggregates).sort()).toEqual([
+      'cycles.count',
+      'erosion.fraction',
+      'erosion.mass',
+      'imports.unknown.count',
+      'orphans.count',
+      'typesafety.escapes.count',
+      'verbosity.fraction',
+      'verbosity.lines',
+    ]);
+    expect(result.aggregates['duplication.percent']).toBeUndefined();
+  });
+
+  it('fusionne les findings de tous les analyseurs', () => {
+    const rules = new Set(scanFast(makeRoot(PROJECT), config).findings.map((f) => f.rule));
+    expect(rules.has('empty-catch')).toBe(true);
+    expect(rules.has('type-escape-any')).toBe(true);
+  });
+});
+
+describe('scanFile', () => {
+  it('analyse un fichier isolé et remonte ses violations', () => {
+    const root = makeRoot(PROJECT);
+    const report = scanFile(root, 'src/helper.ts', config);
+    expect(report.file).toBe('src/helper.ts');
+    expect(report.metrics.functionCount).toBe(1);
+    const rules = report.findings.map((finding) => finding.rule).sort();
+    expect(rules).toEqual(['empty-catch', 'type-escape-any']);
+  });
+
+  it('détecte un paquet non déclaré sans construire le graphe', () => {
+    const root = makeRoot({
+      ...PROJECT,
+      'src/rogue.ts': "import { pad } from 'left-pad';\nexport const use = () => pad;\n",
+    });
+    const report = scanFile(root, 'src/rogue.ts', config);
+    expect(report.findings).toHaveLength(1);
+    expect(report.findings[0]).toMatchObject({ rule: 'unknown-dependency', symbol: 'left-pad' });
+  });
+
+  it('ne remonte rien sur un fichier propre', () => {
+    const root = makeRoot(PROJECT);
+    expect(scanFile(root, 'src/entry.ts', config).findings).toEqual([]);
+  });
+
+  it('se tait sur les dépendances quand le package.json manque', () => {
+    const root = makeRoot({ 'src/rogue.ts': "import 'left-pad';\n" });
+    expect(scanFile(root, 'src/rogue.ts', config).findings).toEqual([]);
+  });
+});
+
+describe('scanFull', () => {
+  it('omet churn et outils externes quand on les saute', async () => {
+    const report = await scanFull(makeRoot(PROJECT), config, {
+      skipChurn: true,
+      skipExternalTools: true,
+    });
+    expect(report.churn).toBeUndefined();
+    expect(report.coupling).toBeUndefined();
+    expect(report.deadCode).toBeUndefined();
+    expect(report.duplication).toBeUndefined();
+    expect(report.filesScanned).toBe(2);
+    expect(report.thresholds.cyclomaticComplexity).toBe(10);
+  });
+
+  it('ajoute churn et couplage sur un dépôt git', async () => {
+    const report = await scanFull(makeRoot(PROJECT, true), config, {
+      skipExternalTools: true,
+      now: new Date(),
+    });
+    expect(report.churn?.available).toBe(true);
+    expect(report.churn?.summary.commitsScanned).toBe(1);
+    expect(report.coupling?.summary).toEqual({ pairs: 0, hiddenPairs: 0 });
+    expect(report.aggregates['coupling.hidden.count']).toBe(0);
+  }, 60_000);
+
+  it('marque le churn indisponible hors dépôt git, sans échouer', async () => {
+    const report = await scanFull(makeRoot(PROJECT), config, { skipExternalTools: true });
+    expect(report.churn?.available).toBe(false);
+    expect(report.churn?.unavailableReason).toBeDefined();
+    expect(report.coupling).toBeUndefined();
+    expect(report.aggregates['coupling.hidden.count']).toBeUndefined();
+  }, 60_000);
+
+  it('renseigne duplication et code mort quand les outils tournent', async () => {
+    const report = await scanFull(makeRoot(PROJECT), config, { skipChurn: true });
+    expect(report.duplication?.available).toBe(true);
+    expect(report.aggregates['duplication.percent']).toBeDefined();
+    expect(report.deadCode).toBeDefined();
+  }, 180_000);
+});
