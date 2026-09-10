@@ -1,5 +1,13 @@
 # crap-detector
 
+> **Statut : expérimental (v0.1).**
+> Le chemin rapide `crap-detector file`, celui du hook, tourne en environ 200 ms sur un fichier.
+> Le scan complet n'est pas encore fiable au-delà de quelques centaines de fichiers : saturation
+> mémoire observée sur deux dépôts de 700 à 1 200 fichiers, et faux positifs sur les fichiers
+> chargés par convention (migrations, tests e2e, scripts). Voir les
+> [issues ouvertes](https://github.com/hugoblanc/crap-detector/issues).
+> À utiliser en local, à titre indicatif, pas encore comme gate de CI.
+
 Détection déterministe de la dégradation d'une base de code TypeScript.
 Métriques AST, hotspots git, duplication, code mort, cycles, couplage caché,
 signatures d'« AI slop », et un cliquet qui fait échouer la CI dès qu'un chiffre empire.
