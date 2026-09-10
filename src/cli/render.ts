@@ -68,17 +68,24 @@ export function renderSummary(report: ScanReport): string[] {
   return lines;
 }
 
+function unavailableNote(
+  label: string,
+  part: { available: boolean; unavailableReason?: string } | undefined,
+): string[] {
+  if (part === undefined || part.available) return [];
+  return [`${label} indisponible : ${part.unavailableReason ?? 'raison inconnue'}`];
+}
+
 /** Un outil manquant doit se voir : sinon on lit « 0 cycle » là où rien n'a été mesuré. */
 function unavailableNotes(report: ScanReport): string[] {
-  const notes: string[] = [];
-  if (report.churn !== undefined && !report.churn.available) {
-    notes.push(`churn indisponible : ${report.churn.unavailableReason ?? 'raison inconnue'}`);
-  }
-  if (report.deadCode !== undefined && !report.deadCode.available) {
-    notes.push(`knip indisponible : ${report.deadCode.unavailableReason ?? 'raison inconnue'}`);
-  }
-  if (report.duplication !== undefined && !report.duplication.available) {
-    notes.push(`jscpd indisponible : ${report.duplication.unavailableReason ?? 'raison inconnue'}`);
+  const notes = [
+    ...unavailableNote('churn', report.churn),
+    ...unavailableNote('knip', report.deadCode),
+    ...unavailableNote('jscpd', report.duplication),
+  ];
+  const gitignoreReason = report.scope.gitignoreUnavailableReason;
+  if (gitignoreReason !== undefined) {
+    notes.push(`fichiers ignorés par git non exclus : ${gitignoreReason}`);
   }
   if (!report.imports.manifestTrusted) {
     notes.push(`dépendances non vérifiées : ${report.imports.manifestReason ?? 'manifeste illisible'}`);
@@ -86,8 +93,22 @@ function unavailableNotes(report: ScanReport): string[] {
   return notes;
 }
 
-export function renderHotspots(hotspots: Hotspot[], top: number): string[] {
-  if (hotspots.length === 0) return ['aucun hotspot : pas d\'historique git exploitable'];
+/**
+ * Une liste vide a trois causes qui ne se traitent pas pareil : git non lu,
+ * git indisponible, ou historique lu sans commit sur un fichier analysé.
+ */
+function noHotspotReason(churn: ScanReport['churn']): string {
+  if (churn === undefined) return 'historique git non lu (--no-git)';
+  if (!churn.available) {
+    return `historique git indisponible (${churn.unavailableReason ?? 'raison inconnue'})`;
+  }
+  const window = churn.since === undefined ? '' : ` (fenêtre : ${churn.since})`;
+  return `${String(churn.summary.commitsScanned)} commits lus, aucun sur un fichier analysé${window}`;
+}
+
+export function renderHotspots(churn: ScanReport['churn'], top: number): string[] {
+  const hotspots: Hotspot[] = churn?.hotspots ?? [];
+  if (hotspots.length === 0) return [`aucun hotspot : ${noHotspotReason(churn)}`];
   return hotspots.slice(0, top).map((hotspot, index) =>
     `${String(index + 1).padStart(2)}. ${hotspot.file}  score ${String(hotspot.score)}`
     + `  (${String(hotspot.commits)} commits × complexité `

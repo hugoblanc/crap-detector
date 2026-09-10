@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultScope, defaultThresholds } from '../../src/core/config.js';
 import { makeFinding } from '../../src/core/findings.js';
-import type { Aggregates, Finding, ScanReport } from '../../src/core/types.js';
+import type { Aggregates, Baseline, Finding, ScanReport } from '../../src/core/types.js';
 import {
   BASELINE_FILENAME,
   activeTools,
@@ -52,6 +52,7 @@ interface ReportOptions {
   withCoupling?: boolean;
   thresholdOverride?: Partial<ReturnType<typeof defaultThresholds>>;
   include?: string[];
+  gitignore?: boolean;
 }
 
 /** ScanReport minimal : seuls les champs que la baseline lit sont remplis. */
@@ -66,7 +67,11 @@ function report(options: ReportOptions = {}): ScanReport {
     ...envelope,
     filesScanned: 3,
     thresholds: { ...defaultThresholds(), ...options.thresholdOverride },
-    scope: { include: options.include ?? defaultScope().include, exclude: defaultScope().exclude },
+    scope: {
+      include: options.include ?? defaultScope().include,
+      exclude: defaultScope().exclude,
+      gitignore: options.gitignore ?? true,
+    },
     metrics: { ...envelope, filesScanned: 3, summary: {} as never, files: [], findings: [] },
     slop: { ...envelope, summary: {} as never, findings: [] },
     imports: { ...envelope, manifestTrusted: true, summary: {} as never, findings: [] },
@@ -203,6 +208,22 @@ describe('incompatibilityReason', () => {
   it('refuse un changement de périmètre', () => {
     expect(incompatibilityReason(baseline, report({ withKnip: true, include: ['src/**/*.ts'] })))
       .toMatch(/périmètre/);
+  });
+
+  it('refuse une baseline écrite sans le filtrage git, y compris sans le champ', () => {
+    const withoutFilter = makeBaseline(report({ withKnip: true, gitignore: false }));
+    expect(incompatibilityReason(withoutFilter, report({ withKnip: true })))
+      .toMatch(/sans exclure les fichiers ignorés par git/);
+    const { include, exclude } = baseline.scope;
+    const legacy = { ...baseline, scope: { include, exclude } } as unknown as Baseline;
+    expect(incompatibilityReason(legacy, report({ withKnip: true })))
+      .toMatch(/sans exclure les fichiers ignorés par git/);
+  });
+
+  it('dit pourquoi un scan n’a pas pu appliquer le filtrage de la baseline', () => {
+    const withoutGit = report({ withKnip: true, gitignore: false });
+    withoutGit.scope.gitignoreUnavailableReason = 'fatal: not a git repository';
+    expect(incompatibilityReason(baseline, withoutGit)).toMatch(/not a git repository/);
   });
 
   it('refuse un changement de version d’outil', () => {

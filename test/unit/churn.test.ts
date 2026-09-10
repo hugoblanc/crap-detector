@@ -2,10 +2,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { defaultScope, resolveConfig } from '../../src/core/config.js';
 import type { FileChurn, FileMetrics } from '../../src/core/types.js';
-import { parseGitLog, windowStartDate } from '../../src/churn/git.js';
+import {
+  parseGitLog,
+  parseIgnoredListing,
+  readGitIgnored,
+  windowStartDate,
+} from '../../src/churn/git.js';
 import {
   aggregateChurn,
   analyzeChurn,
@@ -86,6 +91,19 @@ describe('parseGitLog', () => {
       log({ hash: 'abc', date: '2026-08-26T10:00:00Z', records: ['1\t0\tsrc/we\tird.ts'] }),
     );
     expect(commits[0]?.files[0]?.path).toBe('src/we\tird.ts');
+  });
+});
+
+describe('parseIgnoredListing', () => {
+  it('sépare dossiers repliés et fichiers', () => {
+    const ignored = parseIgnoredListing('.next/\0src/generated/\0next-env.d.ts\0');
+    expect([...ignored.directories]).toEqual(['.next', 'src/generated']);
+    expect([...ignored.files]).toEqual(['next-env.d.ts']);
+  });
+
+  it('rend des ensembles vides sur une sortie vide', () => {
+    const ignored = parseIgnoredListing('');
+    expect(ignored.directories.size + ignored.files.size).toBe(0);
   });
 });
 
@@ -309,5 +327,71 @@ describe('analyzeChurn', () => {
     const report = analyzeChurn(root, config, [], { range: 'HEAD~1..HEAD' });
     expect(report.since).toBe('HEAD~1..HEAD');
     expect(report.summary.commitsScanned).toBe(1);
+  });
+});
+
+describe('racine dans un sous-dossier du dépôt', () => {
+  const config = resolveConfig({});
+  let repo: string;
+
+  beforeAll(() => {
+    repo = mkdtempSync(join(tmpdir(), 'crap-detector-subdir-'));
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: repo, stdio: 'ignore' });
+    };
+    const write = (rel: string, content: string): void => {
+      mkdirSync(join(repo, dirname(rel)), { recursive: true });
+      writeFileSync(join(repo, rel), content, 'utf8');
+    };
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'test');
+    write('.gitignore', 'generated/\n*.local.ts\n');
+    write('app/src/a.ts', 'export const a = 1;\n');
+    write('app/src/b.ts', 'export const b = 1;\n');
+    write('app/src/forced.local.ts', 'export const forced = 1;\n');
+    write('app/generated/client.ts', 'export const client = 1;\n');
+    write('app/supabase/.gitignore', '.temp\n');
+    write('app/supabase/.temp/runtime.ts', 'export const runtime = 1;\n');
+    write('lib/outside.ts', 'export const outside = 1;\n');
+    git('add', '-A');
+    git('add', '-f', 'app/src/forced.local.ts');
+    git('commit', '-qm', 'premier');
+    write('lib/outside.ts', 'export const outside = 2;\n');
+    git('commit', '-qam', 'hors de app');
+    write('app/src/a.ts', 'export const a = 2;\n');
+    git('commit', '-qam', 'dans app');
+  });
+
+  afterAll(() => {
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('rend des chemins relatifs à la racine et ne lit que les commits qui la touchent', () => {
+    const report = analyzeChurn(join(repo, 'app'), config, [], { now: new Date() });
+    expect(report.files.map((entry) => [entry.file, entry.commits])).toEqual([
+      ['src/a.ts', 2],
+      ['src/b.ts', 1],
+      ['src/forced.local.ts', 1],
+    ]);
+    expect(report.summary.commitsScanned).toBe(2);
+  });
+
+  it('applique les .gitignore parents et imbriqués, jamais à un fichier suivi', () => {
+    const ignored = readGitIgnored(join(repo, 'app'));
+    expect(ignored.available).toBe(true);
+    expect([...ignored.directories].sort()).toEqual(['generated', 'supabase/.temp']);
+    expect(ignored.files.has('src/forced.local.ts')).toBe(false);
+  });
+
+  it('signale l’absence de dépôt sans lever', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'crap-detector-nogit-'));
+    try {
+      const ignored = readGitIgnored(outside);
+      expect(ignored.available).toBe(false);
+      expect(ignored.reason).toBeDefined();
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

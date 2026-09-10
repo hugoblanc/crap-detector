@@ -9,7 +9,7 @@
     "knip": "6.32.2",
     "jscpd": "5.0.16"
   },
-  "createdAt": "2026-08-27T10:17:50.397Z",
+  "createdAt": "2026-09-10T18:54:25.866Z",
   "thresholds": {
     "cyclomaticComplexity": 10,
     "cognitiveComplexity": 15,
@@ -41,12 +41,13 @@
       "**/*.test.tsx",
       "**/*.spec.ts",
       "**/__tests__/**"
-    ]
+    ],
+    "gitignore": true
   },
   "aggregates": {
-    "erosion.fraction": 0.411002,
-    "erosion.mass": 1708.900856,
-    "verbosity.fraction": 0.000944,
+    "erosion.fraction": 0.395413,
+    "erosion.mass": 1661.542286,
+    "verbosity.fraction": 0.000914,
     "verbosity.lines": 4,
     "duplication.percent": 0,
     "duplication.lines": 0,
@@ -98,7 +99,6 @@
     "metrics|cyclomatic-complexity|src/churn/coupling.ts": 15,
     "metrics|cyclomatic-complexity|src/churn/git.ts": 18,
     "metrics|cyclomatic-complexity|src/cli.ts": 20,
-    "metrics|cyclomatic-complexity|src/cli/render.ts": 12,
     "metrics|cyclomatic-complexity|src/core/config.ts": 11,
     "metrics|cyclomatic-complexity|src/imports/graph.ts": 12,
     "metrics|cyclomatic-complexity|src/imports/manifest.ts": 17,
@@ -107,8 +107,8 @@
     "metrics|cyclomatic-complexity|src/metrics/sizes.ts": 17,
     "metrics|cyclomatic-complexity|src/scan/full.ts": 12,
     "metrics|cyclomatic-complexity|src/slop/rules.ts": 12,
-    "metrics|file-length|src/baseline/baseline.ts": 382,
-    "metrics|file-length|src/core/types.ts": 344,
+    "metrics|file-length|src/baseline/baseline.ts": 402,
+    "metrics|file-length|src/core/types.ts": 354,
     "metrics|function-length|src/adapters/jscpd.ts": 60,
     "metrics|function-length|src/adapters/knip.ts": 54,
     "metrics|function-length|src/baseline/baseline.ts": 71,
@@ -117,7 +117,7 @@
     "metrics|function-length|src/metrics/analyze.ts": 53,
     "metrics|function-length|src/metrics/cognitive.ts": 62,
     "metrics|function-length|src/scan/fast.ts": 53,
-    "metrics|function-length|src/scan/full.ts": 87,
+    "metrics|function-length|src/scan/full.ts": 88,
     "metrics|nesting-depth|src/adapters/jscpd.ts": 4,
     "metrics|nesting-depth|src/adapters/knip.ts": 4,
     "metrics|nesting-depth|src/imports/analyze.ts": 4,

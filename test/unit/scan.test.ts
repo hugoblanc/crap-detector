@@ -138,12 +138,41 @@ describe('scanFull', () => {
     expect(report.aggregates['coupling.hidden.count']).toBe(0);
   }, 60_000);
 
+  it('joint historique et AST quand la racine est un sous-dossier du dépôt', async () => {
+    const appFiles: Record<string, string> = Object.fromEntries(
+      Object.entries(PROJECT).map(([rel, content]) => [`app/${rel}`, content]),
+    );
+    const repo = makeRoot({
+      ...appFiles,
+      '.gitignore': 'generated/\n',
+      'app/generated/client.ts': 'export const client = (value: any): any => value;\n',
+    }, true);
+    for (const rel of ['app/src/entry.ts', 'app/src/helper.ts']) {
+      writeFileSync(join(repo, rel), `${appFiles[rel] ?? ''}\n// retouche\n`, 'utf8');
+    }
+    execFileSync('git', ['commit', '-qam', 'retouche'], { cwd: repo, stdio: 'ignore' });
+
+    const pairsFromTwoCommits = resolveConfig({ churn: { minCoChangeCommits: 2 } });
+    const report = await scanFull(join(repo, 'app'), pairsFromTwoCommits, {
+      skipExternalTools: true,
+      now: new Date(),
+    });
+    expect(report.scope.gitignore).toBe(true);
+    expect(report.metrics.files.map((file) => file.file)).toEqual(['src/entry.ts', 'src/helper.ts']);
+    expect(report.churn?.hotspots.map((hotspot) => hotspot.file).sort())
+      .toEqual(['src/entry.ts', 'src/helper.ts']);
+    // entry.ts importe helper.ts : la paire est couplée, mais pas en caché.
+    expect(report.coupling?.summary).toEqual({ pairs: 1, hiddenPairs: 0 });
+  }, 60_000);
+
   it('marque le churn indisponible hors dépôt git, sans échouer', async () => {
     const report = await scanFull(makeRoot(PROJECT), config, { skipExternalTools: true });
     expect(report.churn?.available).toBe(false);
     expect(report.churn?.unavailableReason).toBeDefined();
     expect(report.coupling).toBeUndefined();
     expect(report.aggregates['coupling.hidden.count']).toBeUndefined();
+    expect(report.scope.gitignore).toBe(false);
+    expect(report.scope.gitignoreUnavailableReason).toBeDefined();
   }, 60_000);
 
   it('renseigne duplication et code mort quand les outils tournent', async () => {

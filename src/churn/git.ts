@@ -1,6 +1,12 @@
 /**
- * Extraction de l'historique git : un commit = une date et une liste de fichiers touchés.
- * Le parsing est séparé de l'exécution pour être testable sans dépôt.
+ * Lecture de git : l'historique (un commit = une date et une liste de fichiers
+ * touchés) et les fichiers ignorés. Le parsing est séparé de l'exécution pour
+ * être testable sans dépôt.
+ *
+ * rootPath n'est pas forcément la racine du dépôt (`--root app` dans un dépôt
+ * dont le package.json vit dans app/). Tout chemin rendu par git doit donc être
+ * relatif à rootPath, comme ceux de l'analyse AST, sinon aucune jointure ne se fait :
+ * ni hotspot, ni arête d'import pour le couplage.
  *
  * Format demandé : `--numstat -z --format=%x01<hash>%x1f<date>`.
  * Les enregistrements sont séparés par NUL. Un enregistrement de commit commence
@@ -9,6 +15,7 @@
  * portent l'ancien puis le nouveau chemin.
  */
 import { execFileSync } from 'node:child_process';
+import type { IgnoredPaths } from '../core/types.js';
 
 export interface GitFileChange {
   /** Chemin POSIX au moment du commit (destination pour un renommage). */
@@ -88,9 +95,16 @@ export interface GitLogResult {
 
 /** Lance git dans rootPath ; ne lève jamais, l'absence de dépôt est un état normal. */
 export function readGitLog(rootPath: string, options: GitLogOptions = {}): GitLogResult {
-  const args = ['log', '--no-merges', '--numstat', '-z', `--format=${GIT_LOG_FORMAT}`];
+  // --relative rend les chemins relatifs au cwd, et `-- .` ne garde que les commits
+  // qui touchent rootPath. --full-history empêche la simplification d'historique
+  // qu'active un pathspec, qui écarterait des commits de branches fusionnées.
+  const args = [
+    'log', '--no-merges', '--full-history', '--relative', '--numstat', '-z',
+    `--format=${GIT_LOG_FORMAT}`,
+  ];
   if (options.since !== undefined) args.push(`--since=${options.since}`);
   if (options.range !== undefined) args.push(options.range);
+  args.push('--', '.');
   try {
     const raw = execFileSync('git', args, {
       cwd: rootPath,
@@ -101,6 +115,55 @@ export function readGitLog(rootPath: string, options: GitLogOptions = {}): GitLo
     return { available: true, commits: parseGitLog(raw) };
   } catch (error) {
     return { available: false, reason: gitErrorReason(error), commits: [] };
+  }
+}
+
+export interface GitIgnoredResult extends IgnoredPaths {
+  available: boolean;
+  reason?: string;
+}
+
+/**
+ * Découpe la sortie de `git ls-files -z --directory` : une entrée finissant par '/'
+ * est un dossier entièrement ignoré, les autres sont des fichiers.
+ */
+export function parseIgnoredListing(raw: string): IgnoredPaths {
+  const directories = new Set<string>();
+  const files = new Set<string>();
+  for (const entry of raw.split('\0')) {
+    if (entry === '' || entry === './') continue;
+    if (entry.endsWith('/')) directories.add(entry.slice(0, -1));
+    else files.add(entry);
+  }
+  return { directories, files };
+}
+
+/**
+ * Entrées ignorées par git sous rootPath, en chemins relatifs à rootPath.
+ *
+ * On interroge git au lieu de relire les .gitignore : les règles s'empilent
+ * (fichiers imbriqués, .gitignore des dossiers parents quand rootPath est un
+ * sous-dossier, .git/info/exclude, core.excludesFile) et seul git les applique
+ * toutes. `--others` ne liste que du non suivi, donc un fichier suivi qui
+ * correspond à un motif ignoré reste dans le périmètre, comme pour git.
+ * `--directory` replie un dossier ignoré en une ligne : le parcours s'arrête à
+ * son seuil, sans descendre dans `.next/` ou `node_modules/`.
+ */
+export function readGitIgnored(rootPath: string): GitIgnoredResult {
+  try {
+    const raw = execFileSync(
+      'git',
+      ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory'],
+      { cwd: rootPath, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    return { available: true, ...parseIgnoredListing(raw) };
+  } catch (error) {
+    return {
+      available: false,
+      reason: gitErrorReason(error),
+      directories: new Set(),
+      files: new Set(),
+    };
   }
 }
 

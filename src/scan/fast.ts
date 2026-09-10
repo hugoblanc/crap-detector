@@ -17,6 +17,7 @@ import type {
   FileScanReport,
   Finding,
   FileMetrics,
+  IgnoredPaths,
   ImportsReport,
   DependencyReport,
   MetricsReport,
@@ -57,8 +58,8 @@ export function loadSourceFiles(rootPath: string, files: string[]): Map<string, 
   return sources;
 }
 
-export function scanFast(rootPath: string, config: ResolvedConfig): FastScan {
-  const files = collectFiles(rootPath, config.scope);
+export function scanFast(rootPath: string, config: ResolvedConfig, ignored?: IgnoredPaths): FastScan {
+  const files = collectFiles(rootPath, config.scope, ignored);
   const sourceFiles = loadSourceFiles(rootPath, files);
 
   const fileMetrics: FileMetrics[] = [];

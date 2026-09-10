@@ -50,6 +50,10 @@ métriques sont marquées « non mesuré » et le reste fonctionne.
 Options : `--root`, `--json`, `--since <ref>`, `--no-git`, `--no-tools`, `--top`, `--limit`,
 `--baseline`.
 
+`--root` peut viser un sous-dossier du dépôt git, par exemple `app/` quand le `package.json`
+n'est pas à la racine. L'historique est alors restreint aux commits qui touchent ce dossier,
+avec des chemins relatifs à lui, comme ceux de l'analyse AST.
+
 Codes de sortie : `0` propre, `1` gate en échec, `2` violation sur le fichier analysé,
 `3` erreur d'usage.
 
@@ -137,7 +141,8 @@ Cinq règles la gardent honnête :
   `knip` au lieu de les compter comme corrigées.
 - Un changement de seuil, de périmètre ou de version d'outil rend la baseline
   incomparable : le gate échoue en demandant un nouveau snapshot, parce que ces chiffres
-  ne sont réellement pas comparables.
+  ne sont réellement pas comparables. Le périmètre inclut le filtrage git : une baseline
+  écrite sans lui (hors dépôt, ou avant qu'il existe) ne se compare pas à un scan qui l'applique.
 
 ## Configuration
 
@@ -172,6 +177,13 @@ Cinq règles la gardent honnête :
 
 Un fichier mal formé fait échouer la commande avec un message explicite. Jamais de repli
 silencieux sur les défauts.
+
+En plus des globs `exclude`, les fichiers que git ignore sortent du périmètre : sortie de
+build (`.next/`), code généré, fichiers temporaires d'outils. C'est git qui tranche, donc
+les `.gitignore` imbriqués, ceux des dossiers parents, `.git/info/exclude` et
+`core.excludesFile` s'appliquent. Un fichier suivi reste analysé même s'il correspond à un
+motif ignoré. Hors dépôt git, seuls les globs s'appliquent et le résumé le signale.
+Ce filtrage vaut aussi avec `--no-git`, pour que le périmètre ne dépende pas du drapeau.
 
 ## Boucle d'agent
 

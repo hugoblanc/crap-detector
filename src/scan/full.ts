@@ -8,7 +8,8 @@
  */
 import { compareFindings, envelope } from '../core/findings.js';
 import type { ResolvedConfig } from '../core/config.js';
-import type { Aggregates, Finding, ScanReport } from '../core/types.js';
+import type { Aggregates, Finding, ReportScope, ScanReport } from '../core/types.js';
+import type { GitIgnoredResult } from '../churn/git.js';
 import { scanFast } from './fast.js';
 
 export interface ScanOptions {
@@ -27,7 +28,8 @@ export async function scanFull(
   config: ResolvedConfig,
   options: ScanOptions = {},
 ): Promise<ScanReport> {
-  const fast = scanFast(rootPath, config);
+  const ignored = await readIgnored(rootPath);
+  const fast = scanFast(rootPath, config, ignored);
   const aggregates: Aggregates = { ...fast.aggregates };
   const findings: Finding[] = [...fast.findings];
 
@@ -35,7 +37,7 @@ export async function scanFull(
     ...envelope(rootPath, 'ts-morph'),
     filesScanned: fast.files.length,
     thresholds: config.thresholds,
-    scope: { include: [...config.scope.include], exclude: [...config.scope.exclude] },
+    scope: reportScope(config, ignored),
     metrics: fast.metrics,
     slop: fast.slop,
     imports: fast.imports,
@@ -108,4 +110,23 @@ export async function scanFull(
 
   report.findings = findings.sort(compareFindings);
   return report;
+}
+
+/**
+ * Lu même avec --no-git : le périmètre ne doit pas dépendre de ce drapeau, sinon
+ * `check --no-git` compterait `.next/` face à une baseline qui l'excluait.
+ */
+async function readIgnored(rootPath: string): Promise<GitIgnoredResult> {
+  const { readGitIgnored } = await import('../churn/git.js');
+  return readGitIgnored(rootPath);
+}
+
+function reportScope(config: ResolvedConfig, ignored: GitIgnoredResult): ReportScope {
+  const scope: ReportScope = {
+    include: [...config.scope.include],
+    exclude: [...config.scope.exclude],
+    gitignore: ignored.available,
+  };
+  if (ignored.reason !== undefined) scope.gitignoreUnavailableReason = ignored.reason;
+  return scope;
 }

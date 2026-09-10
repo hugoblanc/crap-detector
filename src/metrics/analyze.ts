@@ -12,6 +12,7 @@ import type { ResolvedConfig } from '../core/config.js';
 import type {
   FileMetrics,
   Finding,
+  IgnoredPaths,
   FunctionMetrics,
   MetricsReport,
   MetricsSummary,
@@ -21,10 +22,25 @@ import { cyclomaticComplexity } from './cyclomatic.js';
 import { erosionStats } from './erosion.js';
 import { callbackDepth, describeFunction, fileSloc, functionSloc } from './sizes.js';
 
-/** Fichiers du scope, triés, en chemins POSIX relatifs au rootPath. */
-export function collectFiles(rootPath: string, scope: ResolvedConfig['scope']): string[] {
+/**
+ * Fichiers du scope, triés, en chemins POSIX relatifs au rootPath.
+ * `ignored` retire en plus ce que git ignore ; sans lui, seuls les globs décident.
+ */
+export function collectFiles(
+  rootPath: string,
+  scope: ResolvedConfig['scope'],
+  ignored?: IgnoredPaths,
+): string[] {
   const includePatterns = scope.include.map(globToRegExp);
   const excludePatterns = scope.exclude.map(globToRegExp);
+  const skipDirectory = (relEntry: string): boolean =>
+    ignored?.directories.has(relEntry) === true
+    || matchesAnyGlob(excludePatterns, relEntry)
+    || matchesAnyGlob(excludePatterns, `${relEntry}/`);
+  const keepFile = (relEntry: string): boolean =>
+    ignored?.files.has(relEntry) !== true
+    && matchesAnyGlob(includePatterns, relEntry)
+    && !matchesAnyGlob(excludePatterns, relEntry);
   const files: string[] = [];
   const walk = (dir: string, relDir: string): void => {
     let entries;
@@ -36,16 +52,9 @@ export function collectFiles(rootPath: string, scope: ResolvedConfig['scope']): 
     for (const entry of entries) {
       const relEntry = relDir === '' ? entry.name : `${relDir}/${entry.name}`;
       if (entry.isDirectory()) {
-        const excluded = matchesAnyGlob(excludePatterns, relEntry)
-          || matchesAnyGlob(excludePatterns, `${relEntry}/`);
-        if (!excluded) walk(join(dir, entry.name), relEntry);
-      } else if (entry.isFile()) {
-        if (
-          matchesAnyGlob(includePatterns, relEntry)
-          && !matchesAnyGlob(excludePatterns, relEntry)
-        ) {
-          files.push(relEntry);
-        }
+        if (!skipDirectory(relEntry)) walk(join(dir, entry.name), relEntry);
+      } else if (entry.isFile() && keepFile(relEntry)) {
+        files.push(relEntry);
       }
     }
   };

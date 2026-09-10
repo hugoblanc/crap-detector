@@ -282,6 +282,18 @@ export interface BaselineGenerator {
 export interface BaselineScope {
   include: string[];
   exclude: string[];
+  /** true = fichiers ignorés par git retirés du périmètre ; absent des baselines antérieures. */
+  gitignore: boolean;
+}
+
+export interface ReportScope extends BaselineScope {
+  gitignoreUnavailableReason?: string;
+}
+
+/** Entrées ignorées par git, relatives à rootPath ; un dossier listé l'est en entier. */
+export interface IgnoredPaths {
+  directories: ReadonlySet<string>;
+  files: ReadonlySet<string>;
 }
 
 /**
@@ -359,7 +371,7 @@ export interface CompareResult {
 export interface ScanReport extends ReportEnvelope {
   filesScanned: number;
   thresholds: ThresholdsSnapshot;
-  scope: BaselineScope;
+  scope: ReportScope;
   metrics: MetricsReport;
   slop: SlopReport;
   imports: ImportsReport;

@@ -42,7 +42,7 @@ identifie l'endroit où la dette se paie réellement (Tornhill, *Software Design
 
 ## Si la liste est vide
 
-Le message « aucun hotspot » signifie qu'aucun historique git n'est exploitable :
-dépôt non initialisé, fenêtre trop courte, ou aucun fichier du périmètre modifié
-sur la période. Vérifier avec `git log --oneline -5` avant de conclure quoi que ce soit
-sur la santé du code.
+Le message « aucun hotspot » donne sa cause : `--no-git`, git indisponible (avec
+l'erreur de git), ou des commits lus dont aucun ne touche un fichier analysé (fenêtre
+trop courte, périmètre trop étroit). Vérifier avec `git log --oneline -5 -- .` depuis la
+racine analysée avant de conclure quoi que ce soit sur la santé du code.

@@ -10,7 +10,7 @@ import {
   renderHotspots,
 } from '../../src/cli/render.js';
 import { makeFinding } from '../../src/core/findings.js';
-import type { CompareResult, Hotspot } from '../../src/core/types.js';
+import type { ChurnReport, CompareResult, Hotspot } from '../../src/core/types.js';
 import { main } from '../../src/cli.js';
 
 describe('parseArgs', () => {
@@ -73,8 +73,28 @@ describe('rendu', () => {
     expect(lines[1]).toContain('2 autres');
   });
 
-  it('annonce l’absence de hotspots plutôt qu’une liste vide', () => {
-    expect(renderHotspots([], 10)[0]).toMatch(/aucun hotspot/);
+  function churn(overrides: Partial<ChurnReport> = {}): ChurnReport {
+    return {
+      generatorVersion: '0.1.0',
+      generatedAt: '2026-09-10T10:00:00.000Z',
+      rootPath: '/repo/app',
+      toolVersion: 'git',
+      available: true,
+      windowDays: 365,
+      since: '2025-09-10',
+      summary: { commitsScanned: 42, filesChanged: 3, addedLines: 0, deletedLines: 0 },
+      files: [],
+      hotspots: [],
+      ...overrides,
+    };
+  }
+
+  it('donne la cause d’une liste de hotspots vide', () => {
+    expect(renderHotspots(undefined, 10)).toEqual(['aucun hotspot : historique git non lu (--no-git)']);
+    expect(renderHotspots(churn({ available: false, unavailableReason: 'not a git repository' }), 10))
+      .toEqual(['aucun hotspot : historique git indisponible (not a git repository)']);
+    expect(renderHotspots(churn(), 10))
+      .toEqual(['aucun hotspot : 42 commits lus, aucun sur un fichier analysé (fenêtre : 2025-09-10)']);
   });
 
   it('classe les hotspots avec leur score', () => {
@@ -87,7 +107,7 @@ describe('rendu', () => {
       maxCognitive: 20,
       score: 240,
     };
-    expect(renderHotspots([hotspot], 10)[0]).toContain('src/hot.ts  score 240');
+    expect(renderHotspots(churn({ hotspots: [hotspot] }), 10)[0]).toContain('src/hot.ts  score 240');
   });
 
   it('dirige vers un nouveau snapshot quand la baseline est incomparable', () => {

@@ -182,7 +182,7 @@ async function runHotspots(context: Context): Promise<number> {
     printJson(hotspots);
     return 0;
   }
-  print(renderHotspots(hotspots, numberOption(context.args, 'top', 10)));
+  print(renderHotspots(report.churn, numberOption(context.args, 'top', 10)));
   return 0;
 }
 
@@ -212,7 +212,7 @@ async function runExplain(context: Context): Promise<number> {
     `${relativePath} : ${String(metrics.sloc)} lignes, ${String(metrics.functionCount)} fonctions, `
       + `imbrication max ${String(metrics.maxNestingDepth)}`,
     hotspot === undefined
-      ? 'hotspot : non classé (pas d\'historique git)'
+      ? 'hotspot : non classé (aucun commit lu sur ce fichier, ou historique git indisponible)'
       : `hotspot : score ${String(hotspot.score)} (${String(hotspot.commits)} commits)`,
     '',
   ]);

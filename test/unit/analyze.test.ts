@@ -80,6 +80,13 @@ describe('collectFiles', () => {
       .toEqual(['src/a.test.ts', 'src/a.ts', 'src/types.d.ts']);
   });
 
+  it('écarte les dossiers et fichiers que git ignore', () => {
+    expect(collectFiles(root, config.scope, { directories: new Set(['src/nested']), files: new Set() }))
+      .toEqual(['src/a.ts']);
+    expect(collectFiles(root, config.scope, { directories: new Set(), files: new Set(['src/a.ts']) }))
+      .toEqual(['src/nested/b.tsx']);
+  });
+
   it('rend une liste vide sur un répertoire inexistant', () => {
     expect(collectFiles(join(root, 'absent'), config.scope)).toEqual([]);
   });
