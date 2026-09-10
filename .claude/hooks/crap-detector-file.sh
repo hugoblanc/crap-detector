@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Hook PostToolUse : analyse le fichier que l'agent vient d'écrire.
 #
-# Sortie 2 = Claude Code bloque l'action et renvoie stderr à l'agent, qui corrige
-# immédiatement. C'est la boucle courte : un seuil dépassé est signalé à
-# l'édition, pas trois heures plus tard en CI.
+# Sortie 2 = Claude Code renvoie stderr à l'agent, qui corrige dans la foulée.
+# En PostToolUse le fichier est déjà écrit : la sortie 2 n'annule rien, elle signale.
+# C'est la boucle courte : un seuil dépassé est signalé à l'édition, pas trois
+# heures plus tard en CI.
 #
 # Sortie 0 dans tous les autres cas, y compris si l'outil n'est pas construit :
 # un hook cassé ne doit jamais bloquer une session.

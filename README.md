@@ -169,8 +169,8 @@ silencieux sur les défauts.
 
 Le dépôt fournit un hook `PostToolUse` dans `.claude/`. Après chaque `Write` ou `Edit`
 sur un fichier TypeScript, il lance le chemin rapide sur ce seul fichier ; en cas de
-violation il sort en code 2, ce qui bloque l'action et renvoie les findings à l'agent,
-qui corrige immédiatement.
+violation il sort en code 2. En `PostToolUse` le fichier est déjà écrit, donc rien n'est
+annulé : Claude Code renvoie les findings à l'agent, qui corrige dans la foulée.
 
 Deux skills accompagnent le CLI : `crap-check` (procédure de fin de tâche) et
 `crap-hotspot` (par où commencer un refactoring).
