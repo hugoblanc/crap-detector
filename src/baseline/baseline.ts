@@ -166,7 +166,7 @@ export function incompatibilityReason(baseline: Baseline, report: ScanReport): s
       return `seuil ${key} modifié (${String(previous)} → ${String(value)}) : refaire la baseline`;
     }
   }
-  const scopeReason = scopeIncompatibility(baseline, report.scope);
+  const scopeReason = scopeIncompatibility(baseline, report.scope, report.deadCode?.summary.unusedFiles);
   if (scopeReason !== undefined) return scopeReason;
   const current = toolVersionsOf(report);
   for (const [tool, version] of Object.entries(baseline.toolVersions)) {

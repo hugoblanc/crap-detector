@@ -199,17 +199,30 @@ describe('judgeKnipReport', () => {
     outOfScope: 0,
   };
 
-  it('lit la clé knip du package.json, conseille alors de vérifier ses points d’entrée, et suit le seuil configuré', () => {
+  it('lit la clé knip du package.json, conseille alors de vérifier ses points d’entrée, et suit les seuils configurés', () => {
     const root = makeRoot({ 'package.json': JSON.stringify({ name: 'app', knip: { entry: ['src/main.ts'] } }) });
-    const degraded = judgeKnipReport(root, deadCode, 3, resolveConfig({}).knip);
+    const degraded = judgeKnipReport(root, deadCode, 6, resolveConfig({ knip: { minUnusedFiles: 2 } }).knip);
     expect(degraded.reliability).toMatchObject({ trusted: false, discarded: 3, configFile: 'package.json#knip' });
     expect(degraded.findings.map((finding) => finding.rule)).toEqual(['unlisted-dependency']);
+    expect(degraded.reliability?.note).toContain('2 fichiers sur 6 (33,3 %) signalés inutilisés, au-delà de 33 %');
     expect(degraded.reliability?.note).toContain('Vérifier les points d\'entrée déclarés dans package.json#knip');
 
-    const raised = judgeKnipReport(root, deadCode, 3, resolveConfig({ knip: { maxUnusedFileFraction: 1 } }).knip);
+    const raised = judgeKnipReport(root, deadCode, 6, resolveConfig({ knip: { minUnusedFiles: 2, maxUnusedFileFraction: 1 } }).knip);
     expect(raised.reliability).toMatchObject({ trusted: true, discarded: 0 });
     expect(raised.findings).toHaveLength(4);
     expect(raised.reliability?.note).toBeUndefined();
+  });
+
+  it('garde fiable un petit dépôt dont un fichier sur deux est vraiment mort, sous le minimum de fichiers', () => {
+    const root = makeRoot({ 'knip.json': JSON.stringify({ entry: ['src/main.ts'] }) });
+    const small = {
+      ...deadCode,
+      summary: { unusedFiles: 1, unusedExports: 0, unusedDependencies: 0 },
+      findings: [knipFinding('unused-file', 'src/dead.ts')],
+    };
+    const judged = judgeKnipReport(root, small, 2, resolveConfig({}).knip);
+    expect(judged.reliability).toMatchObject({ trusted: true, unusedFileFraction: 0.5, minUnusedFiles: 10, discarded: 0 });
+    expect(judged.findings.map((finding) => finding.file)).toEqual(['src/dead.ts']);
   });
 });
 

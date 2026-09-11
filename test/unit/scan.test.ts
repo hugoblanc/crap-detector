@@ -361,17 +361,22 @@ describe('scanFull', () => {
 
 describe('fiabilité de knip', () => {
   /** Serveur dont knip ne trouve pas l'entrée : ni main, ni script, ni fichier index. */
-  const UNREACHED = {
+  const routes = Array.from({ length: 10 }, (_, i) => i);
+  const UNREACHED: Record<string, string> = {
     'package.json': JSON.stringify({ name: 'server', dependencies: { 'left-pad': '1.3.0' } }),
-    'src/server.ts': "import { route } from './routes.js';\nexport const start = (): string => route();\n",
-    'src/routes.ts': "import { helper } from './helper.js';\nexport const route = (): string => helper();\n",
+    'src/server.ts': `${routes.map((i) => `import { route${String(i)} } from './route${String(i)}.js';`).join('\n')}\n`
+      + `export const start = (): string[] => [${routes.map((i) => `route${String(i)}()`).join(', ')}];\n`,
     'src/helper.ts': "export const helper = (): string => 'ok';\n",
+    ...Object.fromEntries(routes.map((i) => [
+      `src/route${String(i)}.ts`,
+      `import { helper } from './helper.js';\nexport const route${String(i)} = (): string => helper();\n`,
+    ])),
   };
 
   it('écarte le code mort d’un rapport dégradé, hors agrégats et baseline, et dit quoi faire', async () => {
     const report = await scanFull(makeRoot(UNREACHED), config, { skipChurn: true });
-    expect(report.deadCode?.reliability).toMatchObject({ trusted: false, unusedFileFraction: 1, discarded: 4 });
-    expect(report.deadCode?.summary.unusedFiles).toBe(3);
+    expect(report.deadCode?.reliability).toMatchObject({ trusted: false, unusedFileFraction: 1, discarded: 13 });
+    expect(report.deadCode?.summary.unusedFiles).toBe(12);
     expect(report.findings.filter((finding) => finding.tool === 'knip')).toEqual([]);
     expect(report.aggregates['deadcode.files.count']).toBeUndefined();
     expect(report.aggregates['deadcode.exports.count']).toBeUndefined();
@@ -381,7 +386,7 @@ describe('fiabilité de knip', () => {
     expect(Object.keys(baseline.debtCounts).filter((key) => key.startsWith('knip|'))).toEqual([]);
     const summary = renderSummary(report).join('\n');
     expect(summary).toContain('code mort   non mesuré exports, non mesuré fichiers');
-    expect(summary).toContain('knip jugé non fiable : 3 fichiers sur 3 (100 %) signalés inutilisés, au-delà de 33 % ; 4 findings');
+    expect(summary).toContain('knip jugé non fiable : 12 fichiers sur 12 (100 %) signalés inutilisés, au-delà de 33 % ; 13 findings');
     expect(summary).toContain('comptés. Déclarer les points d\'entrée dans un knip.json, voir https://github.com/hugoblanc/crap-detector#configurer-knip');
   }, 180_000);
 

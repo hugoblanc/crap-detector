@@ -138,7 +138,8 @@ Déclarer dans un `knip.json` (champs `entry` et `project`) les points d'entrée
 knip lit sa configuration à la racine analysée : `knip.json`, `knip.jsonc`, `.knip.json`, `.knip.jsonc`, `knip.ts`, `knip.js`, `knip.config.ts`, `knip.config.js`, ou la clé `knip` du `package.json`.
 Tant qu'il n'y en a aucune, le résumé de `scan` le signale.
 
-**Rapport jugé non fiable.** Quand plus d'un tiers des fichiers du périmètre sortent en `unused-file`, knip est jugé non fiable sur ce dépôt.
+**Rapport jugé non fiable.** Quand plus d'un tiers des fichiers du périmètre, et au moins 10, sortent en `unused-file`, knip est jugé non fiable sur ce dépôt.
+Le minimum garde un petit dépôt de basculer sur un seul fichier vraiment mort : ce fichier reste une régression qui le nomme, pas une baseline incomparable.
 Ses findings `unused-file`, `unused-export`, `unused-type` et `unused-dependency` ne sont alors ni affichés ni comptés : ni agrégat `deadcode.*`, ni dette dans la baseline.
 Le résumé texte et le champ `deadCode.reliability` du JSON disent combien de findings ont été écartés.
 Les autres findings de knip, comme `unlisted-dependency`, et les autres outils ne changent pas.
@@ -280,7 +281,8 @@ Cinq règles la gardent honnête :
     "minCoChangeDegree": 0.5
   },
   "knip": {
-    "maxUnusedFileFraction": 0.33
+    "maxUnusedFileFraction": 0.33,
+    "minUnusedFiles": 10
   }
 }
 ```

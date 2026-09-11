@@ -87,6 +87,12 @@ export interface KnipConfig {
    * ses points d'entrée, 50,5 % quand il les rate. 1 le juge toujours fiable.
    */
   maxUnusedFileFraction: number;
+  /**
+   * Sous ce nombre de fichiers signalés inutilisés, la part n'est pas jugée : sur un petit dépôt, un seul
+   * fichier vraiment mort dépasserait le tiers et se lirait en baseline incomparable plutôt qu'en régression.
+   * Un point d'entrée raté en produit des centaines.
+   */
+  minUnusedFiles: number;
 }
 
 /** Périmètre analysé, en globs relatifs au rootPath. */
@@ -124,9 +130,10 @@ const DEFAULT_CHURN: ChurnConfig = {
   minCoChangeDegree: 0.5,
 };
 
-/** Plus d'un tiers des fichiers signalés inutilisés : voir KnipConfig. */
+/** Plus d'un tiers des fichiers signalés inutilisés, et au moins 10 : voir KnipConfig. */
 const DEFAULT_KNIP: KnipConfig = {
   maxUnusedFileFraction: 0.33,
+  minUnusedFiles: 10,
 };
 
 const DEFAULT_SCOPE: ScopeConfig = {

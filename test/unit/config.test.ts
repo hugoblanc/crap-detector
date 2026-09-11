@@ -101,9 +101,9 @@ describe('règles optionnelles et seuils de signalement', () => {
   });
 
   it('juge knip non fiable au-delà d’un tiers de fichiers inutilisés, seuil réglable par la section knip', () => {
-    expect(resolveConfig({}).knip).toEqual({ maxUnusedFileFraction: 0.33 });
+    expect(resolveConfig({}).knip).toEqual({ maxUnusedFileFraction: 0.33, minUnusedFiles: 10 });
     expect(resolveConfig(loadProjectConfig(configFile({ knip: { maxUnusedFileFraction: 0.5 } }))).knip)
-      .toEqual({ maxUnusedFileFraction: 0.5 });
+      .toEqual({ maxUnusedFileFraction: 0.5, minUnusedFiles: 10 });
     expect(() => loadProjectConfig(configFile({ knip: { entry: 1 } }))).toThrow(/knip\.entry inconnu/);
   });
 });

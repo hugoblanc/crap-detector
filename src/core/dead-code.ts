@@ -22,6 +22,8 @@ export interface KnipReliability {
   unusedFileFraction: number;
   /** Au-delà, knip est jugé non fiable : `knip.maxUnusedFileFraction` de crap-detector.json. */
   maxUnusedFileFraction: number;
+  /** Sous ce nombre de fichiers signalés, knip reste jugé fiable quelle que soit leur part : `knip.minUnusedFiles`. */
+  minUnusedFiles: number;
   /** Findings unused-file, unused-export, unused-type et unused-dependency écartés ; 0 si knip est fiable. */
   discarded: number;
   /** Configuration knip trouvée à la racine ; absente, knip ne connaît que ses conventions. */

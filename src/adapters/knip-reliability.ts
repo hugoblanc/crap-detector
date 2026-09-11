@@ -48,8 +48,9 @@ function findKnipConfig(rootPath: string): string | undefined {
   }
 }
 
+/** Une décimale : 2 fichiers sur 6 arrondis à « 33 % » paraîtraient ne pas dépasser un seuil de 33 %. */
 function percent(fraction: number): string {
-  return `${String(Math.round(fraction * 100))} %`;
+  return `${String(Math.round(fraction * 1000) / 10).replace('.', ',')} %`;
 }
 
 function noteOf(reliability: KnipReliability, unusedFiles: number, filesScanned: number): string | undefined {
@@ -80,12 +81,13 @@ export function judgeKnipReport(
   if (!deadCode.available) return deadCode;
   const { unusedFiles } = deadCode.summary;
   const fraction = filesScanned === 0 ? 0 : unusedFiles / filesScanned;
-  const trusted = fraction <= config.maxUnusedFileFraction;
+  const trusted = unusedFiles < config.minUnusedFiles || fraction <= config.maxUnusedFileFraction;
   const findings = trusted ? deadCode.findings : deadCode.findings.filter((finding) => !REACHABILITY_RULES.has(finding.rule));
   const reliability: KnipReliability = {
     trusted,
-    unusedFileFraction: Math.round(fraction * 1000) / 1000,
+    unusedFileFraction: fraction,
     maxUnusedFileFraction: config.maxUnusedFileFraction,
+    minUnusedFiles: config.minUnusedFiles,
     discarded: deadCode.findings.length - findings.length,
   };
   const configFile = findKnipConfig(rootPath);

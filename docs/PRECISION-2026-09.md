@@ -46,7 +46,7 @@ Les huit autres, de dépendances, de graphe, de couplage et de fichiers ou expor
 
 | Règle | Outil | Alertes | Exactes | Utiles | Faux | Traitement |
 | --- | --- | --- | --- | --- | --- | --- |
-| unused-file | knip | 32 | 41 % | 41 % | 19 | #9 : rapport jugé non fiable au-delà d'un tiers de fichiers inutilisés ; README sur `knip.json` (itération 2) |
+| unused-file | knip | 32 | 41 % | 41 % | 19 | #9 : rapport jugé non fiable au-delà d'un tiers de fichiers inutilisés, et 10 au moins ; README sur `knip.json` (itération 2) |
 | unlisted-dependency | knip | 11 | 27 % | 27 % | 8 | itération 2 (#3) : imports de types seuls avec `@types`, dédoublonnage |
 | unknown-dependency | règle native | 16 | 62 % | 62 % | 6 | itération 2 (#3) : jugement contre le `package.json` le plus proche |
 | unused-dependency | knip | 33 | 67 % | 67 % | 11 | #9 : écartée avec unused-file quand le rapport est jugé non fiable |
