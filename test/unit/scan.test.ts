@@ -3,9 +3,10 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { renderSummary } from '../../src/cli/render.js';
 import { resolveConfig } from '../../src/core/config.js';
 import { scanFast, scanFile } from '../../src/scan/fast.js';
-import { scanFull } from '../../src/scan/full.js';
+import { assertRatiosInRange, scanFull } from '../../src/scan/full.js';
 
 const created: string[] = [];
 const config = resolveConfig({});
@@ -181,4 +182,52 @@ describe('scanFull', () => {
     expect(report.aggregates['duplication.percent']).toBeDefined();
     expect(report.deadCode).toBeDefined();
   }, 180_000);
+
+  it('ne compte ni duplication ni code mort dans une copie du code hors du périmètre', async () => {
+    const block = [
+      'export function compute(values: number[]): number {',
+      '  let total = 0;',
+      '  for (const value of values) {',
+      '    if (value > 0) { total += value; }',
+      '    if (value < 0) { total -= value; }',
+      '  }',
+      '  return total;',
+      '}',
+    ].join('\n');
+    // Copie non ignorée par git et hors include, comme un worktree d'agent.
+    const copy = Object.fromEntries(
+      Object.entries({ ...PROJECT, 'src/compute.ts': block })
+        .map(([rel, content]) => [`copie/${rel}`, content]),
+    );
+    const root = makeRoot({ ...PROJECT, 'src/compute.ts': block, ...copy });
+    const srcOnly = resolveConfig({ scope: { include: ['src/**/*.ts'] } });
+
+    const report = await scanFull(root, srcOnly, { skipChurn: true });
+    expect(report.duplication?.available).toBe(true);
+    expect(report.duplication?.statistics.clones).toBe(0);
+    expect(report.aggregates['verbosity.fraction']).toBeLessThanOrEqual(1);
+    expect(report.deadCode?.available).toBe(true);
+    expect(report.deadCode?.findings.filter((finding) => finding.file.startsWith('copie/'))).toEqual([]);
+    expect(report.deadCode?.outOfScope).toBeGreaterThan(0);
+    expect(renderSummary(report).join('\n'))
+      .toContain(`écartés     ${String(report.deadCode?.outOfScope)} findings knip, 0 clones jscpd`);
+  }, 180_000);
+});
+
+describe('assertRatiosInRange', () => {
+  it('fait échouer un ratio impossible en nommant l’agrégat', () => {
+    expect(() => assertRatiosInRange({ 'verbosity.fraction': 11.67 })).toThrow(/verbosity\.fraction vaut 11\.67/);
+    expect(() => assertRatiosInRange({ 'erosion.fraction': 1.2 })).toThrow(/erosion\.fraction/);
+    expect(() => assertRatiosInRange({ 'duplication.percent': 100.5 })).toThrow(/duplication\.percent/);
+  });
+
+  it('laisse passer les ratios à leur borne et les grandeurs absolues', () => {
+    expect(() => assertRatiosInRange({
+      'erosion.fraction': 1,
+      'verbosity.fraction': 0.4,
+      'duplication.percent': 80,
+      'verbosity.lines': 187_000,
+      'duplication.lines': 1_860_000,
+    })).not.toThrow();
+  });
 });

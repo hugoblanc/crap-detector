@@ -8,7 +8,7 @@
  */
 import { compareFindings, envelope } from '../core/findings.js';
 import type { ResolvedConfig } from '../core/config.js';
-import type { Aggregates, Finding, ReportScope, ScanReport } from '../core/types.js';
+import type { AggregateKey, Aggregates, Finding, ReportScope, ScanReport } from '../core/types.js';
 import type { GitIgnoredResult } from '../churn/git.js';
 import { scanFast } from './fast.js';
 
@@ -83,7 +83,7 @@ export async function scanFull(
       import('../adapters/jscpd.js'),
     ]);
 
-    const deadCode = analyzeDeadCode(rootPath);
+    const deadCode = analyzeDeadCode(rootPath, fast.files);
     report.deadCode = deadCode;
     if (deadCode.available) {
       aggregates['deadcode.exports.count'] = deadCode.summary.unusedExports;
@@ -91,7 +91,7 @@ export async function scanFull(
       findings.push(...deadCode.findings);
     }
 
-    const duplication = analyzeDuplication(rootPath, config.scope.exclude);
+    const duplication = analyzeDuplication(rootPath, fast.files);
     report.duplication = duplication.report;
     if (duplication.report.available) {
       aggregates['duplication.percent'] = duplication.report.statistics.percent;
@@ -108,8 +108,32 @@ export async function scanFull(
     }
   }
 
+  assertRatiosInRange(aggregates);
   report.findings = findings.sort(compareFindings);
   return report;
+}
+
+const RATIO_BOUNDS: ReadonlyArray<readonly [AggregateKey, number]> = [
+  ['erosion.fraction', 1],
+  ['verbosity.fraction', 1],
+  ['duplication.percent', 100],
+];
+
+/**
+ * Un ratio au-delà de sa borne veut dire que numérateur et dénominateur ne portent
+ * pas sur les mêmes fichiers. L'écrire dans une baseline figerait un chiffre faux.
+ */
+export function assertRatiosInRange(aggregates: Aggregates): void {
+  for (const [key, bound] of RATIO_BOUNDS) {
+    const value = aggregates[key];
+    if (value !== undefined && value > bound) {
+      throw new Error(
+        `${key} vaut ${String(value)}, au-delà de ${String(bound)} : ce ratio est impossible, `
+          + 'son numérateur ne porte pas sur le même périmètre que son dénominateur. '
+          + 'Aucun rapport ni baseline écrit.',
+      );
+    }
+  }
 }
 
 /**
@@ -126,6 +150,7 @@ function reportScope(config: ResolvedConfig, ignored: GitIgnoredResult): ReportS
     include: [...config.scope.include],
     exclude: [...config.scope.exclude],
     gitignore: ignored.available,
+    toolsScoped: true,
   };
   if (ignored.reason !== undefined) scope.gitignoreUnavailableReason = ignored.reason;
   return scope;

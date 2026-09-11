@@ -132,6 +132,8 @@ export interface DeadCodeReport extends ReportEnvelope {
   unavailableReason?: string;
   summary: DeadCodeSummary;
   findings: Finding[];
+  /** Findings écartés parce que leur fichier est hors du périmètre ; knip, lui, lit tout le projet. */
+  outOfScope: number;
 }
 
 export interface DuplicationStatistics {
@@ -145,6 +147,8 @@ export interface DuplicationReport extends ReportEnvelope {
   unavailableReason?: string;
   statistics: DuplicationStatistics;
   findings: Finding[];
+  /** Clones dont un côté est hors du périmètre ; 0 attendu, jscpd ne reçoit que ses fichiers. */
+  outOfScope: number;
 }
 
 export interface DependencySummary {
@@ -284,6 +288,8 @@ export interface BaselineScope {
   exclude: string[];
   /** true = fichiers ignorés par git retirés du périmètre ; absent des baselines antérieures. */
   gitignore: boolean;
+  /** knip et jscpd restreints au périmètre ; absent des baselines qui les comptaient hors périmètre. */
+  toolsScoped: true;
 }
 
 export interface ReportScope extends BaselineScope {

@@ -58,6 +58,7 @@ export function renderSummary(report: ScanReport): string[] {
     `duplication ${fraction(aggregates['duplication.percent'])} %`,
     `code mort   ${count(aggregates['deadcode.exports.count'])} exports, `
       + `${count(aggregates['deadcode.files.count'])} fichiers`,
+    ...outOfScopeLine(report),
     `graphe      ${count(aggregates['cycles.count'])} cycles, `
       + `${count(aggregates['orphans.count'])} orphelins`,
     `typage      ${count(aggregates['typesafety.escapes.count'])} échappements`,
@@ -66,6 +67,15 @@ export function renderSummary(report: ScanReport): string[] {
   ];
   for (const note of unavailableNotes(report)) lines.push(note);
   return lines;
+}
+
+/** Ce que les outils externes ont trouvé hors du périmètre et qui n'est pas compté. */
+function outOfScopeLine(report: ScanReport): string[] {
+  if (report.deadCode === undefined && report.duplication === undefined) return [];
+  return [
+    `écartés     ${count(report.deadCode?.outOfScope)} findings knip, `
+      + `${count(report.duplication?.outOfScope)} clones jscpd, hors périmètre`,
+  ];
 }
 
 function unavailableNote(

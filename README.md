@@ -100,7 +100,11 @@ slopsquatting, quand un agent invente une dépendance plausible.
 **Cycles et orphelins**, calculés sur le graphe d'imports interne (composantes fortement
 connexes, Tarjan itératif).
 
-**Code mort et duplication**, via `knip` et `jscpd`.
+**Code mort et duplication**, via `knip` et `jscpd`, sur le même périmètre que l'analyse AST.
+`jscpd` ne reçoit que les fichiers du périmètre.
+`knip` lit tout le projet, pour que les tests, les points d'entrée et les conventions de framework comptent comme importeurs.
+Seuls ses findings sur les fichiers du périmètre sont gardés, avec les dépendances du `package.json` qui les gouverne.
+Le résumé dit combien de findings ont été écartés comme hors périmètre.
 
 **Contre-mesures au gaming.** `functionsPerFile` et `medianFunctionSloc` : un agent qui
 saucissonne pour passer sous un seuil fait monter le premier et chuter le second.
@@ -124,6 +128,7 @@ Cinq règles la gardent honnête :
   (`erosion.mass`, `verbosity.lines`, `duplication.lines`), et une hausse du ratio à
   numérateur constant est reportée comme tolérée au lieu de faire échouer. Sinon le gate
   punirait la suppression de code mort, que l'outil réclame par ailleurs via `knip`.
+  Un ratio impossible, fraction au-delà de 1 ou pourcentage au-delà de 100, fait échouer la commande au lieu d'être écrit dans le rapport ou la baseline.
 
 - **Deux unités de mesure, selon la nature de la règle.** Les règles qui mesurent une
   fonction (`cyclomatic-complexity`, `cognitive-complexity`, `function-length`,
@@ -142,6 +147,7 @@ Cinq règles la gardent honnête :
   incomparable : le gate échoue en demandant un nouveau snapshot, parce que ces chiffres
   ne sont réellement pas comparables. Le périmètre inclut le filtrage git : une baseline
   écrite sans lui (hors dépôt, ou avant qu'il existe) ne se compare pas à un scan qui l'applique.
+  Il inclut aussi la restriction de `knip` et `jscpd` au périmètre : une baseline écrite quand ils comptaient hors périmètre ne se compare pas non plus.
 
 ## Configuration
 

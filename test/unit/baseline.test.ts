@@ -71,6 +71,7 @@ function report(options: ReportOptions = {}): ScanReport {
       include: options.include ?? defaultScope().include,
       exclude: defaultScope().exclude,
       gitignore: options.gitignore ?? true,
+      toolsScoped: true,
     },
     metrics: { ...envelope, filesScanned: 3, summary: {} as never, files: [], findings: [] },
     slop: { ...envelope, summary: {} as never, findings: [] },
@@ -93,6 +94,7 @@ function report(options: ReportOptions = {}): ScanReport {
       available: true,
       summary: { unusedFiles: 0, unusedExports: 0, unusedTypes: 0, unusedDependencies: 0 },
       findings: [],
+      outOfScope: 0,
     };
   }
   if (options.withDuplication === true) {
@@ -102,6 +104,7 @@ function report(options: ReportOptions = {}): ScanReport {
       available: true,
       statistics: { clones: 0, duplicatedLines: 0, percent: 0 },
       findings: [],
+      outOfScope: 0,
     };
   }
   if (options.withCoupling === true) {
@@ -215,9 +218,16 @@ describe('incompatibilityReason', () => {
     expect(incompatibilityReason(withoutFilter, report({ withKnip: true })))
       .toMatch(/sans exclure les fichiers ignorés par git/);
     const { include, exclude } = baseline.scope;
-    const legacy = { ...baseline, scope: { include, exclude } } as unknown as Baseline;
+    const legacy = { ...baseline, scope: { include, exclude, toolsScoped: true } } as unknown as Baseline;
     expect(incompatibilityReason(legacy, report({ withKnip: true })))
       .toMatch(/sans exclure les fichiers ignorés par git/);
+  });
+
+  it('refuse une baseline qui comptait knip et jscpd hors du périmètre', () => {
+    const { include, exclude, gitignore } = baseline.scope;
+    const legacy = { ...baseline, scope: { include, exclude, gitignore } } as unknown as Baseline;
+    expect(incompatibilityReason(legacy, report({ withKnip: true })))
+      .toMatch(/hors du périmètre : refaire la baseline/);
   });
 
   it('dit pourquoi un scan n’a pas pu appliquer le filtrage de la baseline', () => {

@@ -145,6 +145,7 @@ export function makeBaseline(report: ScanReport): Baseline {
       include: [...report.scope.include],
       exclude: [...report.scope.exclude],
       gitignore: report.scope.gitignore,
+      toolsScoped: report.scope.toolsScoped,
     },
     aggregates: roundAggregates(report.aggregates),
     debtCounts: debt.counts,
@@ -157,8 +158,9 @@ function sameList(a: string[], b: string[]): boolean {
 }
 
 /**
- * Mêmes globs et même filtrage git, sinon les deux scans n'ont pas lu les mêmes fichiers.
+ * Mêmes globs, même filtrage git et outils restreints au périmètre, sinon les deux scans n'ont pas lu les mêmes fichiers.
  * Sans champ `gitignore`, la baseline date d'avant ce filtrage et comptait `.next/`.
+ * Sans `toolsScoped`, sa dette knip hors périmètre disparaîtrait en passant pour corrigée.
  */
 function scopeIncompatibility(
   baseline: Baseline['scope'],
@@ -166,6 +168,9 @@ function scopeIncompatibility(
 ): string | undefined {
   if (!sameList(baseline.include, current.include) || !sameList(baseline.exclude, current.exclude)) {
     return 'périmètre d\'analyse modifié : refaire la baseline';
+  }
+  if (baseline.toolsScoped !== true) {
+    return 'la baseline compte la duplication et le code mort hors du périmètre : refaire la baseline';
   }
   if (baseline.gitignore === current.gitignore) return undefined;
   if (baseline.gitignore === true) {

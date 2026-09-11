@@ -89,6 +89,7 @@ describe('parseJsonOutput', () => {
 });
 
 describe('mapKnipReport', () => {
+  const scope = ['src/a.ts', 'src/orphan.ts'];
   const report = {
     issues: [
       {
@@ -109,7 +110,7 @@ describe('mapKnipReport', () => {
   };
 
   it('compte chaque catégorie dans le résumé', () => {
-    expect(mapKnipReport(report).summary).toEqual({
+    expect(mapKnipReport(report, scope).summary).toEqual({
       unusedFiles: 1,
       unusedExports: 1,
       unusedTypes: 1,
@@ -118,7 +119,7 @@ describe('mapKnipReport', () => {
   });
 
   it('produit un finding par entrée, avec règle et ligne', () => {
-    const findings = mapKnipReport(report).findings;
+    const findings = mapKnipReport(report, scope).findings;
     const unusedExport = findings.find((finding) => finding.symbol === 'unusedHelper');
     expect(unusedExport).toMatchObject({
       tool: 'knip',
@@ -131,64 +132,107 @@ describe('mapKnipReport', () => {
       .toBe('unlisted-dependency');
   });
 
+  it('écarte les findings hors périmètre et recalcule le résumé sur ceux qui restent', () => {
+    const copy = '.claude/worktrees/copie';
+    const mapping = mapKnipReport({
+      issues: [
+        ...report.issues,
+        { file: `${copy}/src/orphan.ts`, files: true },
+        { file: `${copy}/src/a.ts`, exports: [{ name: 'unusedHelper', line: 30 }] },
+        { file: `${copy}/package.json`, dependencies: [{ name: 'left-pad', line: 12 }] },
+        { file: 'packages/web/package.json', dependencies: [{ name: 'react', line: 4 }] },
+        { file: 'src/a.test.ts', exports: [{ name: 'fixture', line: 1 }] },
+      ],
+    }, [...scope, 'packages/web/src/page.tsx']);
+    expect(mapping.outOfScope).toBe(4);
+    expect(mapping.summary).toEqual({
+      unusedFiles: 1,
+      unusedExports: 1,
+      unusedTypes: 1,
+      unusedDependencies: 3,
+    });
+    expect(mapping.findings.filter((finding) => finding.file.includes('copie'))).toEqual([]);
+  });
+
   it('garde un id stable quand la ligne change', () => {
-    const before = mapKnipReport(report).findings.find((finding) => finding.symbol === 'unusedHelper');
+    const before = mapKnipReport(report, scope).findings
+      .find((finding) => finding.symbol === 'unusedHelper');
     const moved = mapKnipReport({
       issues: [{ file: 'src/a.ts', exports: [{ name: 'unusedHelper', line: 99 }] }],
-    }).findings[0];
+    }, scope).findings[0];
     expect(moved?.id).toBe(before?.id);
   });
 
   it('tolère une sortie vide ou malformée', () => {
-    expect(mapKnipReport({}).findings).toEqual([]);
-    expect(mapKnipReport({ issues: 'pas un tableau' }).findings).toEqual([]);
-    expect(mapKnipReport({ issues: [{ exports: [{ name: 'x' }] }] }).findings).toEqual([]);
+    expect(mapKnipReport({}, scope).findings).toEqual([]);
+    expect(mapKnipReport({ issues: 'pas un tableau' }, scope).findings).toEqual([]);
+    expect(mapKnipReport({ issues: [{ exports: [{ name: 'x' }] }] }, scope).findings).toEqual([]);
   });
 });
 
 describe('mapJscpdReport', () => {
+  const scope = { root: '/repo', files: ['src/a.ts', 'src/b.ts', 'src/c.ts'] };
   const report = {
     statistics: { total: { clones: 2, duplicatedLines: 23, percentage: 0.81 } },
     duplicates: [
       {
         lines: 5,
-        firstFile: { name: 'src/a.ts', start: 10, end: 14 },
-        secondFile: { name: 'src/b.ts', start: 40, end: 44 },
+        firstFile: { name: '/repo/src/a.ts', start: 10, end: 14 },
+        secondFile: { name: '/repo/src/b.ts', start: 40, end: 44 },
       },
       {
         lines: 3,
-        firstFile: { name: 'src/a.ts', start: 12, end: 14 },
-        secondFile: { name: 'src/c.ts', start: 1, end: 3 },
+        firstFile: { name: '/repo/src/a.ts', start: 12, end: 14 },
+        secondFile: { name: '/repo/src/c.ts', start: 1, end: 3 },
       },
     ],
   };
 
   it('reprend les statistiques globales', () => {
-    expect(mapJscpdReport(report, 5).statistics)
+    expect(mapJscpdReport(report, 5, scope).statistics)
       .toEqual({ clones: 2, duplicatedLines: 23, percent: 0.81 });
   });
 
-  it('accumule les lignes clonées des deux côtés, sans doublon', () => {
-    const { cloneLines } = mapJscpdReport(report, 5);
+  it('accumule les lignes clonées des deux côtés, sans doublon, en chemins relatifs', () => {
+    const { cloneLines } = mapJscpdReport(report, 5, scope);
     expect([...(cloneLines.get('src/a.ts') ?? [])].sort((x, y) => x - y))
       .toEqual([10, 11, 12, 13, 14]);
     expect([...(cloneLines.get('src/c.ts') ?? [])]).toEqual([1, 2, 3]);
   });
 
   it('produit un finding par clone, pointant les deux emplacements', () => {
-    const findings = mapJscpdReport(report, 5).findings;
+    const findings = mapJscpdReport(report, 5, scope).findings;
     expect(findings).toHaveLength(2);
     expect(findings[0]).toMatchObject({ tool: 'jscpd', rule: 'duplicate-block', file: 'src/a.ts' });
     expect(findings[0]?.message).toContain('src/');
   });
 
+  it('écarte un clone dont un seul côté est hors périmètre', () => {
+    const mapping = mapJscpdReport({
+      ...report,
+      duplicates: [
+        ...report.duplicates,
+        {
+          lines: 8,
+          firstFile: { name: '/repo/src/a.ts', start: 50, end: 57 },
+          secondFile: { name: '/repo/.claude/worktrees/copie/src/a.ts', start: 50, end: 57 },
+        },
+      ],
+    }, 5, scope);
+    expect(mapping.outOfScope).toBe(1);
+    expect(mapping.findings).toHaveLength(2);
+    expect([...mapping.cloneLines.keys()].sort()).toEqual(['src/a.ts', 'src/b.ts', 'src/c.ts']);
+    expect(mapping.cloneLines.get('src/a.ts')?.has(50)).toBe(false);
+  });
+
   it('ignore un doublon dont un côté est incomplet', () => {
-    const partial = { duplicates: [{ lines: 5, firstFile: { name: 'a.ts', start: 1 } }] };
-    expect(mapJscpdReport(partial, 5).clones).toEqual([]);
+    const partial = { duplicates: [{ lines: 5, firstFile: { name: '/repo/src/a.ts', start: 1 } }] };
+    expect(mapJscpdReport(partial, 5, scope).clones).toEqual([]);
   });
 
   it('tolère un rapport vide', () => {
-    expect(mapJscpdReport({}, 5).statistics).toEqual({ clones: 0, duplicatedLines: 0, percent: 0 });
+    expect(mapJscpdReport({}, 5, scope).statistics)
+      .toEqual({ clones: 0, duplicatedLines: 0, percent: 0 });
   });
 });
 
@@ -205,7 +249,7 @@ describe('analyzeDeadCode sur un vrai projet', () => {
       'src/index.ts': "export { used } from './helpers.js';\n",
       'src/helpers.ts': ['export const used = 1;', 'export const neverUsed = 2;'].join('\n'),
     });
-    const report = analyzeDeadCode(root);
+    const report = analyzeDeadCode(root, ['src/helpers.ts', 'src/index.ts']);
     expect(report.available).toBe(true);
     expect(report.summary.unusedExports).toBeGreaterThanOrEqual(1);
     expect(report.findings.some((finding) => finding.symbol === 'neverUsed')).toBe(true);
@@ -213,25 +257,45 @@ describe('analyzeDeadCode sur un vrai projet', () => {
 });
 
 describe('analyzeDuplication sur un vrai projet', () => {
+  const block = [
+    'export function compute(values: number[]): number {',
+    '  let total = 0;',
+    '  for (const value of values) {',
+    '    if (value > 0) { total += value; }',
+    '    if (value < 0) { total -= value; }',
+    '  }',
+    '  return total;',
+    '}',
+  ].join('\n');
+
   it('détecte un bloc copié-collé et rend des chemins relatifs', () => {
-    const block = [
-      'export function compute(values: number[]): number {',
-      '  let total = 0;',
-      '  for (const value of values) {',
-      '    if (value > 0) { total += value; }',
-      '    if (value < 0) { total -= value; }',
-      '  }',
-      '  return total;',
-      '}',
-    ].join('\n');
     const root = makeRoot({
       'src/a.ts': `${block}\n`,
       'src/b.ts': `${block.replace('compute', 'computeAgain')}\n`,
     });
-    const { report, cloneLines } = analyzeDuplication(root, ['node_modules/**']);
+    const { report, cloneLines } = analyzeDuplication(root, ['src/a.ts', 'src/b.ts']);
     expect(report.available).toBe(true);
     expect(report.statistics.clones).toBeGreaterThanOrEqual(1);
-    expect([...cloneLines.keys()].every((file) => !file.startsWith('/'))).toBe(true);
+    expect(report.outOfScope).toBe(0);
     expect([...cloneLines.keys()].sort()).toEqual(['src/a.ts', 'src/b.ts']);
   }, 120_000);
+
+  it('ne lit que les fichiers du périmètre, pas le reste de la racine', () => {
+    const root = makeRoot({
+      'src/a.ts': `${block}\n`,
+      'copie/src/a.ts': `${block}\n`,
+      'copie/src/b.ts': `${block.replace('compute', 'computeAgain')}\n`,
+    });
+    const { report, cloneLines } = analyzeDuplication(root, ['src/a.ts']);
+    expect(report.available).toBe(true);
+    expect(report.statistics).toEqual({ clones: 0, duplicatedLines: 0, percent: 0 });
+    expect(cloneLines.size).toBe(0);
+  }, 120_000);
+
+  it('ne lance pas jscpd sur un périmètre vide, qui lui ferait lire toute la racine', () => {
+    const root = makeRoot({ 'copie/a.ts': `${block}\n`, 'copie/b.ts': `${block}\n` });
+    const { report } = analyzeDuplication(root, []);
+    expect(report.available).toBe(false);
+    expect(report.unavailableReason).toMatch(/aucun fichier/);
+  });
 });

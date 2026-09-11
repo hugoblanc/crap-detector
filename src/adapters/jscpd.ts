@@ -5,10 +5,15 @@
  * deux choses, un rapport de duplication et l'ensemble des lignes clonées.
  *
  * jscpd n'écrit son JSON que dans un fichier ; la sortie standard ne sert à rien.
+ *
+ * jscpd reçoit la liste exacte des fichiers du périmètre, pas la racine. Filtrer ses
+ * clones après coup ne suffirait pas : il regroupe les copies d'un même bloc autour
+ * de la première rencontrée, donc deux fichiers du périmètre ne sont reliés que par
+ * une copie hors périmètre, et ses statistiques ne se recalculent pas à partir des clones.
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { compareFindings, envelope, makeFinding } from '../core/findings.js';
 import type { DuplicationReport, DuplicationStatistics, Finding } from '../core/types.js';
 import { runTool } from './run.js';
@@ -31,76 +36,97 @@ export interface JscpdMapping {
   findings: Finding[];
   /** Lignes couvertes par au moins un clone, par fichier — entrée de la verbosité. */
   cloneLines: Map<string, Set<number>>;
+  /** Clones écartés parce qu'un de leurs côtés n'est pas un fichier du périmètre. */
+  outOfScope: number;
 }
 
-function sideOf(raw: unknown): CloneSide | undefined {
+/** Racine telle que jscpd l'écrit : il résout les liens symboliques (/tmp → /private/tmp). */
+export interface JscpdScope {
+  root: string;
+  files: readonly string[];
+}
+
+function sideOf(raw: unknown, root: string): CloneSide | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const side = raw as Record<string, unknown>;
-  const file = side['name'];
+  const name = side['name'];
   const start = side['start'];
   const end = side['end'];
-  if (typeof file !== 'string' || typeof start !== 'number' || typeof end !== 'number') {
+  if (typeof name !== 'string' || typeof start !== 'number' || typeof end !== 'number') {
     return undefined;
   }
-  return { file, start, end };
+  return { file: relative(root, name).split('\\').join('/'), start, end };
 }
 
-export function mapJscpdReport(parsed: unknown, threshold: number): JscpdMapping {
+function readStatistics(parsed: unknown): DuplicationStatistics {
   const statistics: DuplicationStatistics = { clones: 0, duplicatedLines: 0, percent: 0 };
-  const clones: Clone[] = [];
-  const cloneLines = new Map<string, Set<number>>();
-
   const total = (parsed as { statistics?: { total?: unknown } }).statistics?.total;
-  if (typeof total === 'object' && total !== null) {
-    const stats = total as Record<string, unknown>;
-    if (typeof stats['clones'] === 'number') statistics.clones = stats['clones'];
-    if (typeof stats['duplicatedLines'] === 'number') {
-      statistics.duplicatedLines = stats['duplicatedLines'];
-    }
-    if (typeof stats['percentage'] === 'number') statistics.percent = stats['percentage'];
-  }
+  if (typeof total !== 'object' || total === null) return statistics;
+  const stats = total as Record<string, unknown>;
+  if (typeof stats['clones'] === 'number') statistics.clones = stats['clones'];
+  if (typeof stats['duplicatedLines'] === 'number') statistics.duplicatedLines = stats['duplicatedLines'];
+  if (typeof stats['percentage'] === 'number') statistics.percent = stats['percentage'];
+  return statistics;
+}
 
+function readClones(parsed: unknown, root: string): Clone[] {
   const duplicates = (parsed as { duplicates?: unknown }).duplicates;
-  if (Array.isArray(duplicates)) {
-    for (const raw of duplicates) {
-      if (typeof raw !== 'object' || raw === null) continue;
-      const entry = raw as Record<string, unknown>;
-      const first = sideOf(entry['firstFile']);
-      const second = sideOf(entry['secondFile']);
-      if (first === undefined || second === undefined) continue;
-      const lines = typeof entry['lines'] === 'number' ? entry['lines'] : first.end - first.start + 1;
-      clones.push({ first, second, lines });
-      for (const side of [first, second]) {
-        let covered = cloneLines.get(side.file);
-        if (covered === undefined) {
-          covered = new Set();
-          cloneLines.set(side.file, covered);
-        }
-        for (let line = side.start; line <= side.end; line += 1) covered.add(line);
-      }
-    }
+  if (!Array.isArray(duplicates)) return [];
+  const clones: Clone[] = [];
+  for (const raw of duplicates) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const entry = raw as Record<string, unknown>;
+    const first = sideOf(entry['firstFile'], root);
+    const second = sideOf(entry['secondFile'], root);
+    if (first === undefined || second === undefined) continue;
+    const lines = typeof entry['lines'] === 'number' ? entry['lines'] : first.end - first.start + 1;
+    clones.push({ first, second, lines });
   }
+  return clones;
+}
 
-  const findings = clones
-    .map((clone) => {
-      const key = `${clone.second.file}:${clone.second.start}`;
-      return makeFinding({
-        tool: 'jscpd',
-        rule: 'duplicate-block',
-        file: clone.first.file,
-        line: clone.first.start,
-        symbol: key,
-        symbolKey: key,
-        value: clone.lines,
-        threshold,
-        message:
-          `${clone.lines} lignes dupliquées avec ${clone.second.file}`
-          + ` (lignes ${clone.second.start}-${clone.second.end})`,
-      });
-    })
-    .sort(compareFindings);
+function coveredLines(clones: Clone[]): Map<string, Set<number>> {
+  const byFile = new Map<string, Set<number>>();
+  for (const side of clones.flatMap((clone) => [clone.first, clone.second])) {
+    let covered = byFile.get(side.file);
+    if (covered === undefined) {
+      covered = new Set();
+      byFile.set(side.file, covered);
+    }
+    for (let line = side.start; line <= side.end; line += 1) covered.add(line);
+  }
+  return byFile;
+}
 
-  return { statistics, clones, findings, cloneLines };
+function cloneFinding(clone: Clone, threshold: number): Finding {
+  const key = `${clone.second.file}:${clone.second.start}`;
+  return makeFinding({
+    tool: 'jscpd',
+    rule: 'duplicate-block',
+    file: clone.first.file,
+    line: clone.first.start,
+    symbol: key,
+    symbolKey: key,
+    value: clone.lines,
+    threshold,
+    message:
+      `${clone.lines} lignes dupliquées avec ${clone.second.file}`
+      + ` (lignes ${clone.second.start}-${clone.second.end})`,
+  });
+}
+
+/** Un clone ne compte que si ses deux côtés sont des fichiers du périmètre. */
+export function mapJscpdReport(parsed: unknown, threshold: number, scope: JscpdScope): JscpdMapping {
+  const inScope = new Set(scope.files);
+  const all = readClones(parsed, scope.root);
+  const clones = all.filter((clone) => inScope.has(clone.first.file) && inScope.has(clone.second.file));
+  return {
+    statistics: readStatistics(parsed),
+    clones,
+    findings: clones.map((clone) => cloneFinding(clone, threshold)).sort(compareFindings),
+    cloneLines: coveredLines(clones),
+    outOfScope: all.length - clones.length,
+  };
 }
 
 export interface DuplicationAnalysis {
@@ -114,62 +140,73 @@ const MIN_CLONE_TOKENS = 50;
 /** Formats jscpd correspondant au périmètre TypeScript de l'outil. */
 const CLONE_FORMATS = 'typescript,tsx';
 
-export function analyzeDuplication(
+function unavailable(
   rootPath: string,
-  excludeGlobs: string[],
+  toolVersion: string,
+  reason: string,
+  outOfScope = 0,
 ): DuplicationAnalysis {
+  return {
+    report: {
+      ...envelope(rootPath, toolVersion),
+      available: false,
+      unavailableReason: reason,
+      statistics: { clones: 0, duplicatedLines: 0, percent: 0 },
+      findings: [],
+      outOfScope,
+    },
+    cloneLines: new Map(),
+  };
+}
+
+/** La liste passe par un fichier de config : en arguments, elle dépasse vite ARG_MAX. */
+function jscpdArgs(outputDir: string, root: string, files: readonly string[]): string[] {
+  const configPath = join(outputDir, 'jscpd-scope.json');
+  writeFileSync(configPath, JSON.stringify({ path: files.map((file) => join(root, file)) }), 'utf8');
+  return [
+    '--config', configPath,
+    '--absolute',
+    '--reporters', 'json',
+    '--output', outputDir,
+    '--silent',
+    '--min-lines', String(MIN_CLONE_LINES),
+    '--min-tokens', String(MIN_CLONE_TOKENS),
+    '--format', CLONE_FORMATS,
+  ];
+}
+
+/** `files` : fichiers du périmètre, relatifs à rootPath, tels que rendus par collectFiles. */
+export function analyzeDuplication(rootPath: string, files: readonly string[]): DuplicationAnalysis {
+  // Sans chemin, jscpd analyse son répertoire courant : tout le dépôt.
+  if (files.length === 0) return unavailable(rootPath, 'inconnue', 'aucun fichier dans le périmètre');
+  const root = realpathSync(rootPath);
   const outputDir = mkdtempSync(join(tmpdir(), 'crap-detector-jscpd-'));
   try {
-    const args = [
-      '--reporters', 'json',
-      '--output', outputDir,
-      '--silent',
-      '--min-lines', String(MIN_CLONE_LINES),
-      '--min-tokens', String(MIN_CLONE_TOKENS),
-      // Sans restriction de format, jscpd analyse aussi le Markdown et le HTML
-      // du dépôt, hors du périmètre déclaré dans le scope.
-      '--format', CLONE_FORMATS,
-    ];
-    for (const glob of excludeGlobs) args.push('--ignore', glob);
-    args.push(rootPath);
-    const result = runTool('jscpd', 'jscpd', args, rootPath);
-    const base = { ...envelope(rootPath, result.version), available: result.ok };
-    const empty: DuplicationStatistics = { clones: 0, duplicatedLines: 0, percent: 0 };
-    if (!result.ok) {
-      return {
-        report: {
-          ...base,
-          unavailableReason: result.reason ?? 'jscpd indisponible',
-          statistics: empty,
-          findings: [],
-        },
-        cloneLines: new Map(),
-      };
-    }
+    const result = runTool('jscpd', 'jscpd', jscpdArgs(outputDir, root, files), rootPath);
+    if (!result.ok) return unavailable(rootPath, result.version, result.reason ?? 'jscpd indisponible');
+    let mapping: JscpdMapping;
     try {
       const raw = readFileSync(join(outputDir, 'jscpd-report.json'), 'utf8');
-      const mapping = mapJscpdReport(JSON.parse(raw), MIN_CLONE_LINES);
-      return {
-        report: {
-          ...base,
-          statistics: mapping.statistics,
-          findings: mapping.findings,
-        },
-        cloneLines: mapping.cloneLines,
-      };
+      mapping = mapJscpdReport(JSON.parse(raw), MIN_CLONE_LINES, { root, files });
     } catch (error) {
-      return {
-        report: {
-          ...base,
-          available: false,
-          unavailableReason:
-            `rapport jscpd illisible : ${error instanceof Error ? error.message : String(error)}`,
-          statistics: empty,
-          findings: [],
-        },
-        cloneLines: new Map(),
-      };
+      const message = error instanceof Error ? error.message : String(error);
+      return unavailable(rootPath, result.version, `rapport jscpd illisible : ${message}`);
     }
+    if (mapping.outOfScope > 0) {
+      const reason = `jscpd a rendu ${mapping.outOfScope} clone(s) hors des fichiers transmis : `
+        + 'ses statistiques couvrent un autre périmètre';
+      return unavailable(rootPath, result.version, reason, mapping.outOfScope);
+    }
+    return {
+      report: {
+        ...envelope(rootPath, result.version),
+        available: true,
+        statistics: mapping.statistics,
+        findings: mapping.findings,
+        outOfScope: 0,
+      },
+      cloneLines: mapping.cloneLines,
+    };
   } finally {
     rmSync(outputDir, { recursive: true, force: true });
   }

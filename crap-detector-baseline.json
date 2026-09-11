@@ -9,7 +9,7 @@
     "knip": "6.32.2",
     "jscpd": "5.0.16"
   },
-  "createdAt": "2026-09-10T18:54:25.866Z",
+  "createdAt": "2026-09-11T08:57:25.977Z",
   "thresholds": {
     "cyclomaticComplexity": 10,
     "cognitiveComplexity": 15,
@@ -42,12 +42,13 @@
       "**/*.spec.ts",
       "**/__tests__/**"
     ],
-    "gitignore": true
+    "gitignore": true,
+    "toolsScoped": true
   },
   "aggregates": {
-    "erosion.fraction": 0.395413,
-    "erosion.mass": 1661.542286,
-    "verbosity.fraction": 0.000914,
+    "erosion.fraction": 0.342514,
+    "erosion.mass": 1416.458754,
+    "verbosity.fraction": 0.000895,
     "verbosity.lines": 4,
     "duplication.percent": 0,
     "duplication.lines": 0,
@@ -78,8 +79,6 @@
     "metrics|passthrough-wrapper|src/metrics/cognitive.ts": 1
   },
   "debtMaxima": {
-    "metrics|cognitive-complexity|src/adapters/jscpd.ts": 33,
-    "metrics|cognitive-complexity|src/adapters/knip.ts": 41,
     "metrics|cognitive-complexity|src/baseline/baseline.ts": 18,
     "metrics|cognitive-complexity|src/churn/analyze.ts": 21,
     "metrics|cognitive-complexity|src/churn/coupling.ts": 18,
@@ -92,8 +91,6 @@
     "metrics|cognitive-complexity|src/metrics/cognitive.ts": 25,
     "metrics|cognitive-complexity|src/scan/full.ts": 16,
     "metrics|cognitive-complexity|src/slop/rules.ts": 17,
-    "metrics|cyclomatic-complexity|src/adapters/jscpd.ts": 16,
-    "metrics|cyclomatic-complexity|src/adapters/knip.ts": 17,
     "metrics|cyclomatic-complexity|src/baseline/baseline.ts": 12,
     "metrics|cyclomatic-complexity|src/churn/analyze.ts": 11,
     "metrics|cyclomatic-complexity|src/churn/coupling.ts": 15,
@@ -107,19 +104,15 @@
     "metrics|cyclomatic-complexity|src/metrics/sizes.ts": 17,
     "metrics|cyclomatic-complexity|src/scan/full.ts": 12,
     "metrics|cyclomatic-complexity|src/slop/rules.ts": 12,
-    "metrics|file-length|src/baseline/baseline.ts": 402,
-    "metrics|file-length|src/core/types.ts": 354,
-    "metrics|function-length|src/adapters/jscpd.ts": 60,
-    "metrics|function-length|src/adapters/knip.ts": 54,
+    "metrics|file-length|src/baseline/baseline.ts": 407,
+    "metrics|file-length|src/core/types.ts": 360,
     "metrics|function-length|src/baseline/baseline.ts": 71,
     "metrics|function-length|src/churn/coupling.ts": 56,
     "metrics|function-length|src/imports/manifest.ts": 68,
     "metrics|function-length|src/metrics/analyze.ts": 53,
     "metrics|function-length|src/metrics/cognitive.ts": 62,
     "metrics|function-length|src/scan/fast.ts": 53,
-    "metrics|function-length|src/scan/full.ts": 88,
-    "metrics|nesting-depth|src/adapters/jscpd.ts": 4,
-    "metrics|nesting-depth|src/adapters/knip.ts": 4,
+    "metrics|function-length|src/scan/full.ts": 89,
     "metrics|nesting-depth|src/imports/analyze.ts": 4,
     "metrics|nesting-depth|src/imports/manifest.ts": 4,
     "metrics|nesting-depth|src/metrics/analyze.ts": 4,

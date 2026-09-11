@@ -3,8 +3,13 @@
  * Les agents laissent beaucoup de code orphelin derrière eux ; c'est le
  * nettoyeur déterministe le plus rentable de la pile.
  *
+ * knip lit tout le projet : les tests, les conventions de framework et les points
+ * d'entrée doivent compter comme importeurs, sinon un module importé seulement par
+ * ses tests paraît mort. Seuls ses findings sont ramenés au périmètre mesuré.
+ *
  * Le parsing est séparé de l'exécution : `mapKnipReport` est testable sans knip.
  */
+import { posix } from 'node:path';
 import { compareFindings, envelope, makeFinding } from '../core/findings.js';
 import type { DeadCodeReport, DeadCodeSummary, Finding } from '../core/types.js';
 import { parseJsonOutput, runTool } from './run.js';
@@ -39,64 +44,85 @@ function isUnusedFile(issue: Record<string, unknown>): boolean {
 export interface KnipMapping {
   summary: DeadCodeSummary;
   findings: Finding[];
+  outOfScope: number;
 }
 
-export function mapKnipReport(parsed: unknown): KnipMapping {
-  const findings: Finding[] = [];
-  const summary: DeadCodeSummary = {
-    unusedFiles: 0,
-    unusedExports: 0,
-    unusedTypes: 0,
-    unusedDependencies: 0,
+function summarize(findings: Finding[]): DeadCodeSummary {
+  const count = (rule: string): number => findings.filter((finding) => finding.rule === rule).length;
+  return {
+    unusedFiles: count('unused-file'),
+    unusedExports: count('unused-export'),
+    unusedTypes: count('unused-type'),
+    unusedDependencies: count('unused-dependency'),
   };
-  const issues = (parsed as { issues?: unknown }).issues;
-  if (!Array.isArray(issues)) return { summary, findings };
+}
 
+/**
+ * knip rattache les dépendances inutilisées au package.json, qui n'est jamais un
+ * fichier mesuré. Le manifeste compte s'il gouverne au moins un fichier du périmètre.
+ */
+function isScopeManifest(file: string, files: readonly string[]): boolean {
+  if (posix.basename(file) !== 'package.json') return false;
+  const dir = posix.dirname(file);
+  return dir === '.' || files.some((scoped) => scoped.startsWith(`${dir}/`));
+}
+
+function entryFinding(file: string, kind: (typeof ISSUE_KINDS)[number], entry: KnipEntry): Finding {
+  const name = typeof entry.name === 'string' ? entry.name : '#anonyme';
+  return makeFinding({
+    tool: 'knip',
+    rule: kind.rule,
+    file,
+    symbol: name,
+    symbolKey: name,
+    severity: kind.key === 'unresolved' ? 'critical' : 'major',
+    message: `${kind.label} : ${name}`,
+    ...(typeof entry.line === 'number' ? { line: entry.line } : {}),
+  });
+}
+
+function readFindings(parsed: unknown): Finding[] {
+  const issues = (parsed as { issues?: unknown }).issues;
+  if (!Array.isArray(issues)) return [];
+  const findings: Finding[] = [];
   for (const raw of issues) {
     if (typeof raw !== 'object' || raw === null) continue;
     const issue = raw as Record<string, unknown>;
     const file = typeof issue['file'] === 'string' ? issue['file'] : '';
     if (file === '') continue;
-
     if (isUnusedFile(issue)) {
-      summary.unusedFiles += 1;
       findings.push(
-        makeFinding({
-          tool: 'knip',
-          rule: 'unused-file',
-          file,
-          severity: 'major',
-          message: 'fichier jamais importé',
-        }),
+        makeFinding({ tool: 'knip', rule: 'unused-file', file, severity: 'major', message: 'fichier jamais importé' }),
       );
     }
-
     for (const kind of ISSUE_KINDS) {
-      for (const entry of entriesOf(issue, kind.key)) {
-        const name = typeof entry.name === 'string' ? entry.name : '#anonyme';
-        if (kind.key === 'exports') summary.unusedExports += 1;
-        if (kind.key === 'types') summary.unusedTypes += 1;
-        if (kind.key === 'dependencies' || kind.key === 'devDependencies') {
-          summary.unusedDependencies += 1;
-        }
-        const finding = makeFinding({
-          tool: 'knip',
-          rule: kind.rule,
-          file,
-          symbol: name,
-          symbolKey: name,
-          severity: kind.key === 'unresolved' ? 'critical' : 'major',
-          message: `${kind.label} : ${name}`,
-          ...(typeof entry.line === 'number' ? { line: entry.line } : {}),
-        });
-        findings.push(finding);
-      }
+      findings.push(...entriesOf(issue, kind.key).map((entry) => entryFinding(file, kind, entry)));
     }
   }
-  return { summary, findings: findings.sort(compareFindings) };
+  return findings;
 }
 
-export function analyzeDeadCode(rootPath: string): DeadCodeReport {
+/** `files` : fichiers du périmètre, relatifs à la racine comme les chemins de knip. */
+export function mapKnipReport(parsed: unknown, files: readonly string[]): KnipMapping {
+  const findings = readFindings(parsed);
+  const inScope = new Set(files);
+  const kept = findings.filter((finding) =>
+    inScope.has(finding.file) || isScopeManifest(finding.file, files));
+  return {
+    summary: summarize(kept),
+    findings: kept.sort(compareFindings),
+    outOfScope: findings.length - kept.length,
+  };
+}
+
+const EMPTY_SUMMARY: DeadCodeSummary = {
+  unusedFiles: 0,
+  unusedExports: 0,
+  unusedTypes: 0,
+  unusedDependencies: 0,
+};
+
+export function analyzeDeadCode(rootPath: string, files: readonly string[]): DeadCodeReport {
   // knip sort 1 dès qu'il trouve quelque chose : ce n'est pas un échec.
   const result = runTool('knip', 'knip', ['--reporter', 'json', '--no-progress'], rootPath, {
     successExitCodes: [1],
@@ -105,24 +131,18 @@ export function analyzeDeadCode(rootPath: string): DeadCodeReport {
     ...envelope(rootPath, result.version),
     available: result.ok,
   };
-  if (!result.ok) {
-    return {
-      ...base,
-      unavailableReason: result.reason ?? 'knip indisponible',
-      summary: { unusedFiles: 0, unusedExports: 0, unusedTypes: 0, unusedDependencies: 0 },
-      findings: [],
-    };
-  }
+  const unavailable = (reason: string): DeadCodeReport => ({
+    ...base,
+    available: false,
+    unavailableReason: reason,
+    summary: { ...EMPTY_SUMMARY },
+    findings: [],
+    outOfScope: 0,
+  });
+  if (!result.ok) return unavailable(result.reason ?? 'knip indisponible');
   try {
-    const mapping = mapKnipReport(parseJsonOutput(result.stdout));
-    return { ...base, ...mapping };
+    return { ...base, ...mapKnipReport(parseJsonOutput(result.stdout), files) };
   } catch (error) {
-    return {
-      ...base,
-      available: false,
-      unavailableReason: `sortie knip illisible : ${error instanceof Error ? error.message : String(error)}`,
-      summary: { unusedFiles: 0, unusedExports: 0, unusedTypes: 0, unusedDependencies: 0 },
-      findings: [],
-    };
+    return unavailable(`sortie knip illisible : ${error instanceof Error ? error.message : String(error)}`);
   }
 }
