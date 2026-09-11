@@ -49,7 +49,7 @@ Rend les métriques du fichier, son score de hotspot et la liste de ce qui lui e
   `crap-detector baseline` fige l'état courant comme nouveau plancher : lancé pour
   masquer une régression, il transforme la dette ajoutée en dette acceptée.
   Ne le lancer que si la sortie dit explicitement que la baseline est incomparable
-  (changement de seuil, de périmètre ou de version d'outil), ou si l'utilisateur le demande.
+  (changement de seuil, de périmètre, de règles activées ou de version d'outil), ou si l'utilisateur le demande.
 
 - **Ne pas découper une fonction uniquement pour passer sous un seuil.**
   L'outil suit `functionsPerFile` et `medianFunctionSloc` précisément pour ça :

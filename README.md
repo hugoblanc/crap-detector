@@ -13,6 +13,7 @@ Métriques AST, hotspots git, duplication, code mort, cycles, couplage caché,
 signatures d'« AI slop », et un cliquet qui fait échouer la CI dès qu'un chiffre empire.
 
 La justification empirique de chaque métrique est dans [`docs/ETAT-DE-L-ART-2026.md`](docs/ETAT-DE-L-ART-2026.md).
+Ce que valent ses alertes sur cinq dépôts réels, et les réglages par défaut qui en découlent, sont dans [`docs/PRECISION-2026-09.md`](docs/PRECISION-2026-09.md).
 
 ## Le principe
 
@@ -41,14 +42,15 @@ métriques sont marquées « non mesuré » et le reste fonctionne.
 | Commande | Ce qu'elle fait | Sortie |
 | --- | --- | --- |
 | `crap-detector scan` | Analyse complète du dépôt | 0 |
-| `crap-detector file <chemin>` | Un seul fichier, chemin rapide | 2 si violation |
+| `crap-detector file <chemin>` | Un seul fichier, chemin rapide | 2 si violation signalée |
 | `crap-detector baseline` | Écrit `crap-detector-baseline.json` | 0 |
 | `crap-detector check` | Compare à la baseline | 1 si régression |
 | `crap-detector hotspots` | Classe par churn × complexité | 0 |
 | `crap-detector explain <chemin>` | Ce qui est reproché à un fichier | 1 si findings |
 
 Options : `--root`, `--json`, `--since <ref>`, `--no-git`, `--no-tools`, `--top`, `--limit`,
-`--baseline`.
+`--baseline`, `--all`.
+`--all` affiche aussi les findings sous le seuil de signalement, voir [Deux niveaux de seuil](#deux-niveaux-de-seuil).
 
 `--root` peut viser un sous-dossier du dépôt git, par exemple `app/` quand le `package.json`
 n'est pas à la racine. L'historique est alors restreint aux commits qui touchent ce dossier,
@@ -84,8 +86,8 @@ Repères : 0,15 humain, 0,33 agentique. Elle augmente sur 89,8 % des trajectoire
 agentiques, contre 80 % pour l'érosion : c'est le signal le plus fréquent des deux.
 
 **Signatures d'AI slop.** `catch` vide ou qui ne fait que logger (error-masking, +47 %
-chez GitClear), `else` redondant, variable assignée puis retournée, ternaire booléen,
-wrapper qui transmet ses paramètres à l'identique.
+chez GitClear).
+`else` redondant, variable assignée puis retournée, ternaire booléen et wrapper qui transmet ses paramètres à l'identique sont désactivés par défaut, voir [Règles par défaut](#règles-par-défaut).
 
 **Échappements de typage.** `any` explicite, `as unknown as`, `@ts-ignore`, `@ts-nocheck`.
 `@ts-expect-error` n'est pas visé : il échoue une fois l'erreur disparue, donc il se nettoie.
@@ -129,6 +131,46 @@ Quand des sous-dossiers du périmètre ont leur propre `package.json`, le résum
 **Contre-mesures au gaming.** `functionsPerFile` et `medianFunctionSloc` : un agent qui
 saucissonne pour passer sous un seuil fait monter le premier et chuter le second.
 
+## Règles par défaut
+
+Sur cinq dépôts TypeScript réels, 699 alertes vérifiées à la main étaient exactes à 89 %, mais utiles à 30 % seulement ([détail](docs/PRECISION-2026-09.md)).
+Six règles exactes mais presque jamais utiles sont donc désactivées par défaut :
+
+| Règle | Alertes utiles |
+| --- | --- |
+| `assign-then-return` | 0 % |
+| `redundant-else` | 0 % |
+| `boolean-ternary` | 0 % |
+| `unused-type` (knip) | 2 % |
+| `passthrough-wrapper` | 5 % |
+| `nested-callbacks` | 12 % |
+
+Désactivée, une règle n'est pas mesurée : ni finding, ni dette dans la baseline, ni lignes comptées dans la verbosité.
+Chacune se réactive par sa clé dans la section `rules` de `crap-detector.json`, par exemple `"rules": { "redundant-else": true }`.
+Une clé inconnue fait échouer la commande.
+
+## Deux niveaux de seuil
+
+Les six règles de taille et de complexité ont deux seuils.
+Le seuil du cliquet, dans `thresholds`, décide de ce que la baseline compte.
+Le seuil de signalement, dans `reportThresholds`, décide de ce que `scan`, `explain` et le hook `file` affichent par défaut.
+
+| Règle | Clé | Cliquet | Signalement |
+| --- | --- | --- | --- |
+| `function-length` | `maxLinesPerFunction` | 50 | 100 |
+| `file-length` | `maxFileLines` | 300 | 600 |
+| `cyclomatic-complexity` | `cyclomaticComplexity` | 10 | 25 |
+| `cognitive-complexity` | `cognitiveComplexity` | 15 | 30 |
+| `nesting-depth` | `maxDepth` | 3 | 5 |
+| `too-many-params` | `maxParams` | 4 | 6 |
+
+Au-delà du seuil de signalement, un finding s'affiche.
+Entre les deux seuils, il est compté par le cliquet mais masqué : le texte dit combien, `--all` les affiche, et le JSON les garde avec `"belowReportThreshold": true`.
+Le hook `file` ne sort en code 2 que pour un finding affiché : une fonction de 55 lignes n'interrompt pas l'agent.
+`check` affiche toujours les findings derrière une régression, masqués ou non, puisque ce sont eux qui font échouer le gate.
+Changer un seuil de signalement ne rend pas la baseline incomparable : ce qui est compté ne change pas.
+Sur les dépôts mesurés, la valeur médiane des alertes utiles était proche du double de celle des alertes exactes mais inutiles, d'où ces défauts.
+
 ## Le cliquet
 
 `crap-detector baseline` fige l'état courant dans `crap-detector-baseline.json`, à commiter.
@@ -170,6 +212,7 @@ Cinq règles la gardent honnête :
   écrite sans lui (hors dépôt, ou avant qu'il existe) ne se compare pas à un scan qui l'applique.
   Il inclut aussi la restriction de `knip` et `jscpd` au périmètre : une baseline écrite quand ils comptaient hors périmètre ne se compare pas non plus.
   De même pour une baseline écrite avant les règles d'imports actuelles (`importRules`) : ses faux positifs de dépendances laisseraient de la marge à un vrai paquet inventé.
+  De même enfin quand les règles optionnelles activées diffèrent (`rules`), ou pour une baseline écrite avant leur sélection, qui les comptait toutes.
 
 ## Configuration
 
@@ -188,6 +231,22 @@ Cinq règles la gardent honnête :
     "duplicationPercent": 3,
     "erosionFraction": 0.35,
     "verbosityFraction": 0.2
+  },
+  "reportThresholds": {
+    "cyclomaticComplexity": 25,
+    "cognitiveComplexity": 30,
+    "maxLinesPerFunction": 100,
+    "maxFileLines": 600,
+    "maxDepth": 5,
+    "maxParams": 6
+  },
+  "rules": {
+    "assign-then-return": false,
+    "boolean-ternary": false,
+    "nested-callbacks": false,
+    "passthrough-wrapper": false,
+    "redundant-else": false,
+    "unused-type": false
   },
   "scope": {
     "include": ["**/*.ts", "**/*.tsx"],
@@ -216,7 +275,7 @@ Ce filtrage vaut aussi avec `--no-git`, pour que le périmètre ne dépende pas 
 
 Le dépôt fournit un hook `PostToolUse` dans `.claude/`. Après chaque `Write` ou `Edit`
 sur un fichier TypeScript, il lance le chemin rapide sur ce seul fichier ; en cas de
-violation il sort en code 2. En `PostToolUse` le fichier est déjà écrit, donc rien n'est
+violation au-delà du seuil de signalement il sort en code 2. En `PostToolUse` le fichier est déjà écrit, donc rien n'est
 annulé : Claude Code renvoie les findings à l'agent, qui corrige dans la foulée.
 
 Deux skills accompagnent le CLI : `crap-check` (procédure de fin de tâche) et
