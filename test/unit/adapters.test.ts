@@ -5,7 +5,9 @@ import { dirname, join } from 'node:path';
 import { findPackageDir, parseJsonOutput, resolveTool, runTool } from '../../src/adapters/run.js';
 import { analyzeDeadCode, mapKnipReport } from '../../src/adapters/knip.js';
 import { analyzeDuplication, mapJscpdReport } from '../../src/adapters/jscpd.js';
+import { judgeKnipReport } from '../../src/adapters/knip-reliability.js';
 import { resolveConfig } from '../../src/core/config.js';
+import { makeFinding } from '../../src/core/findings.js';
 
 const created: string[] = [];
 const withTypes = resolveConfig({ rules: { 'unused-type': true } }).rules;
@@ -180,6 +182,34 @@ describe('mapKnipReport', () => {
     expect(mapKnipReport({}, scope, withTypes).findings).toEqual([]);
     expect(mapKnipReport({ issues: 'pas un tableau' }, scope, withTypes).findings).toEqual([]);
     expect(mapKnipReport({ issues: [{ exports: [{ name: 'x' }] }] }, scope, withTypes).findings).toEqual([]);
+  });
+});
+
+describe('judgeKnipReport', () => {
+  const knipFinding = (rule: string, file: string) => makeFinding({ tool: 'knip', rule, file, symbol: file, message: rule });
+  const deadCode = {
+    generatorVersion: '0.1.0', generatedAt: '', rootPath: '/repo', toolVersion: '6.32.2', available: true,
+    summary: { unusedFiles: 2, unusedExports: 1, unusedDependencies: 0 },
+    findings: [
+      knipFinding('unused-file', 'src/a.ts'),
+      knipFinding('unused-file', 'src/b.ts'),
+      knipFinding('unused-export', 'src/c.ts'),
+      knipFinding('unlisted-dependency', 'src/c.ts'),
+    ],
+    outOfScope: 0,
+  };
+
+  it('lit la clé knip du package.json, conseille alors de vérifier ses points d’entrée, et suit le seuil configuré', () => {
+    const root = makeRoot({ 'package.json': JSON.stringify({ name: 'app', knip: { entry: ['src/main.ts'] } }) });
+    const degraded = judgeKnipReport(root, deadCode, 3, resolveConfig({}).knip);
+    expect(degraded.reliability).toMatchObject({ trusted: false, discarded: 3, configFile: 'package.json#knip' });
+    expect(degraded.findings.map((finding) => finding.rule)).toEqual(['unlisted-dependency']);
+    expect(degraded.reliability?.note).toContain('Vérifier les points d\'entrée déclarés dans package.json#knip');
+
+    const raised = judgeKnipReport(root, deadCode, 3, resolveConfig({ knip: { maxUnusedFileFraction: 1 } }).knip);
+    expect(raised.reliability).toMatchObject({ trusted: true, discarded: 0 });
+    expect(raised.findings).toHaveLength(4);
+    expect(raised.reliability?.note).toBeUndefined();
   });
 });
 

@@ -99,6 +99,13 @@ describe('règles optionnelles et seuils de signalement', () => {
     expect(() => loadProjectConfig(configFile({ reportThresholds: { maxNestedCallbacks: 5 } })))
       .toThrow(/reportThresholds\.maxNestedCallbacks inconnu/);
   });
+
+  it('juge knip non fiable au-delà d’un tiers de fichiers inutilisés, seuil réglable par la section knip', () => {
+    expect(resolveConfig({}).knip).toEqual({ maxUnusedFileFraction: 0.33 });
+    expect(resolveConfig(loadProjectConfig(configFile({ knip: { maxUnusedFileFraction: 0.5 } }))).knip)
+      .toEqual({ maxUnusedFileFraction: 0.5 });
+    expect(() => loadProjectConfig(configFile({ knip: { entry: 1 } }))).toThrow(/knip\.entry inconnu/);
+  });
 });
 
 describe('resolveConfig', () => {

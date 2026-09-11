@@ -534,6 +534,30 @@ describe('compareToBaseline', () => {
   });
 });
 
+describe('fiabilité de knip', () => {
+  function judged(knipTrusted: boolean | undefined, withKnip = true): ScanReport {
+    const scan = report({ withKnip });
+    scan.scope.knipTrusted = knipTrusted;
+    return scan;
+  }
+
+  it('refuse une baseline écrite avec knip fiable face à un scan où il ne l’est plus, et inversement', () => {
+    const result = compareToBaseline(makeBaseline(judged(true)), judged(false));
+    expect(result).toMatchObject({ comparable: false, passed: false });
+    expect(result.incompatibilityReason).toMatch(/knip est jugé non fiable sur ce scan/);
+    expect(incompatibilityReason(makeBaseline(judged(false)), judged(true))).toMatch(/knip est désormais jugé fiable/);
+    expect(incompatibilityReason(makeBaseline(judged(false)), judged(false))).toBeUndefined();
+  });
+
+  it('lit une baseline antérieure comme fiable, et ne juge rien quand knip n’a pas tourné d’un côté', () => {
+    const legacy = makeBaseline(judged(undefined));
+    expect(incompatibilityReason(legacy, judged(true))).toBeUndefined();
+    expect(incompatibilityReason(legacy, judged(false))).toMatch(/non fiable/);
+    expect(incompatibilityReason(makeBaseline(judged(false)), judged(undefined, false))).toBeUndefined();
+    expect(incompatibilityReason(makeBaseline(judged(undefined, false)), judged(false))).toBeUndefined();
+  });
+});
+
 describe('lecture et écriture', () => {
   it('fait un aller-retour fidèle', () => {
     const dir = tempDir();

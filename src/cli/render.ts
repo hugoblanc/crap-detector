@@ -79,8 +79,14 @@ export function renderSummary(report: ScanReport): string[] {
       + 'installés mais non déclarés',
     `couplage    ${count(aggregates['coupling.hidden.count'])} paires couplées sans import`,
   ];
-  for (const note of [...unavailableNotes(report), ...subprojectNote(report)]) lines.push(note);
+  for (const note of [...unavailableNotes(report), ...knipNote(report), ...subprojectNote(report)]) lines.push(note);
   return lines;
+}
+
+/** knip jugé non fiable, ou sans configuration : ses findings de code mort ne se lisent pas tels quels. */
+function knipNote(report: ScanReport): string[] {
+  const note = report.deadCode?.reliability?.note;
+  return note === undefined ? [] : [note];
 }
 
 /** Sans compte d'orphelins, knip a tourné : ses fichiers inutilisés en tiennent lieu. */

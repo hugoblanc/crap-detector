@@ -49,7 +49,9 @@ Rend les métriques du fichier, son score de hotspot et la liste de ce qui lui e
   `crap-detector baseline` fige l'état courant comme nouveau plancher : lancé pour
   masquer une régression, il transforme la dette ajoutée en dette acceptée.
   Ne le lancer que si la sortie dit explicitement que la baseline est incomparable
-  (changement de seuil, de périmètre, de règles activées ou de version d'outil), ou si l'utilisateur le demande.
+  (changement de seuil, de périmètre, de règles activées, de version d'outil ou de fiabilité de knip), ou si l'utilisateur le demande.
+  Si la raison est que knip est désormais jugé non fiable, refaire la baseline effacerait tout son code mort :
+  vérifier d'abord que le changement n'a pas ajouté de fichiers morts, puis déclarer les points d'entrée dans un `knip.json`.
 
 - **Ne pas découper une fonction uniquement pour passer sous un seuil.**
   L'outil suit `functionsPerFile` et `medianFunctionSloc` précisément pour ça :

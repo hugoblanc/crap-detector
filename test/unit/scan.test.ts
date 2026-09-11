@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { makeBaseline } from '../../src/baseline/baseline.js';
 import { renderSummary } from '../../src/cli/render.js';
 import { resolveConfig } from '../../src/core/config.js';
 import { makeFinding } from '../../src/core/findings.js';
@@ -356,6 +357,56 @@ describe('scanFull', () => {
     expect(report.aggregates['verbosity.fraction']).toBeGreaterThan(0);
     expect(report.aggregates['verbosity.fraction']).toBeLessThanOrEqual(1);
   });
+});
+
+describe('fiabilité de knip', () => {
+  /** Serveur dont knip ne trouve pas l'entrée : ni main, ni script, ni fichier index. */
+  const UNREACHED = {
+    'package.json': JSON.stringify({ name: 'server', dependencies: { 'left-pad': '1.3.0' } }),
+    'src/server.ts': "import { route } from './routes.js';\nexport const start = (): string => route();\n",
+    'src/routes.ts': "import { helper } from './helper.js';\nexport const route = (): string => helper();\n",
+    'src/helper.ts': "export const helper = (): string => 'ok';\n",
+  };
+
+  it('écarte le code mort d’un rapport dégradé, hors agrégats et baseline, et dit quoi faire', async () => {
+    const report = await scanFull(makeRoot(UNREACHED), config, { skipChurn: true });
+    expect(report.deadCode?.reliability).toMatchObject({ trusted: false, unusedFileFraction: 1, discarded: 4 });
+    expect(report.deadCode?.summary.unusedFiles).toBe(3);
+    expect(report.findings.filter((finding) => finding.tool === 'knip')).toEqual([]);
+    expect(report.aggregates['deadcode.files.count']).toBeUndefined();
+    expect(report.aggregates['deadcode.exports.count']).toBeUndefined();
+    expect(report.duplication?.available).toBe(true);
+    const baseline = makeBaseline(report);
+    expect(baseline.scope.knipTrusted).toBe(false);
+    expect(Object.keys(baseline.debtCounts).filter((key) => key.startsWith('knip|'))).toEqual([]);
+    const summary = renderSummary(report).join('\n');
+    expect(summary).toContain('code mort   non mesuré exports, non mesuré fichiers');
+    expect(summary).toContain('knip jugé non fiable : 3 fichiers sur 3 (100 %) signalés inutilisés, au-delà de 33 % ; 4 findings');
+    expect(summary).toContain('comptés. Déclarer les points d\'entrée dans un knip.json, voir https://github.com/hugoblanc/crap-detector#configurer-knip');
+  }, 180_000);
+
+  it('garde un rapport sain, signalé tant que le dépôt n’a pas de configuration knip', async () => {
+    const root = makeRoot({
+      'package.json': JSON.stringify({ name: 'lib', main: 'src/index.ts' }),
+      'src/index.ts': "import { a } from './a.js';\nimport { b } from './b.js';\nexport const run = (): number => a + b;\n",
+      'src/a.ts': 'export const a = 1;\nexport const unusedExport = 2;\n',
+      'src/b.ts': 'export const b = 2;\n',
+      'src/lost.ts': 'export const lost = 1;\n',
+    });
+    const unconfigured = await scanFull(root, config, { skipChurn: true });
+    expect(unconfigured.deadCode?.reliability).toMatchObject({ trusted: true, unusedFileFraction: 0.25, discarded: 0 });
+    expect(unconfigured.scope.knipTrusted).toBe(true);
+    expect(unconfigured.aggregates['deadcode.files.count']).toBe(1);
+    expect(unconfigured.findings.filter((finding) => finding.tool === 'knip').map((finding) => finding.rule).sort())
+      .toEqual(['unused-export', 'unused-file']);
+    expect(renderSummary(unconfigured).join('\n')).toContain('knip sans configuration (knip.json ou clé knip du package.json)');
+
+    writeFileSync(join(root, 'knip.json'), JSON.stringify({ entry: ['src/index.ts'] }), 'utf8');
+    const configured = await scanFull(root, config, { skipChurn: true });
+    expect(configured.deadCode?.reliability).toMatchObject({ trusted: true, configFile: 'knip.json' });
+    expect(configured.deadCode?.reliability?.note).toBeUndefined();
+    expect(renderSummary(configured).join('\n')).not.toMatch(/knip sans configuration|knip jugé non fiable/);
+  }, 180_000);
 });
 
 describe('withoutNativeDuplicates', () => {

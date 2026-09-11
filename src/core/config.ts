@@ -79,6 +79,16 @@ export interface ChurnConfig {
   minCoChangeDegree: number;
 }
 
+/** Fiabilité du rapport knip (adapters/knip-reliability.ts). */
+export interface KnipConfig {
+  /**
+   * Au-delà de cette part de fichiers du périmètre signalés inutilisés, knip est jugé non fiable et son
+   * code mort n'est pas compté. Sur cinq dépôts sans configuration knip : 14,5 % au plus quand il trouve
+   * ses points d'entrée, 50,5 % quand il les rate. 1 le juge toujours fiable.
+   */
+  maxUnusedFileFraction: number;
+}
+
 /** Périmètre analysé, en globs relatifs au rootPath. */
 export interface ScopeConfig {
   include: string[];
@@ -114,6 +124,11 @@ const DEFAULT_CHURN: ChurnConfig = {
   minCoChangeDegree: 0.5,
 };
 
+/** Plus d'un tiers des fichiers signalés inutilisés : voir KnipConfig. */
+const DEFAULT_KNIP: KnipConfig = {
+  maxUnusedFileFraction: 0.33,
+};
+
 const DEFAULT_SCOPE: ScopeConfig = {
   include: ['**/*.ts', '**/*.tsx', '**/*.mts', '**/*.cts'],
   exclude: [
@@ -138,6 +153,7 @@ export interface ProjectConfig {
   rules?: Partial<RuleSwitches>;
   scope?: Partial<ScopeConfig>;
   churn?: Partial<ChurnConfig>;
+  knip?: Partial<KnipConfig>;
 }
 
 export const CONFIG_FILENAME = 'crap-detector.json';
@@ -251,7 +267,14 @@ export function loadProjectConfig(rootPath: string): ProjectConfig {
     rules: rulesSection(parsed),
     churn: numberSection(parsed, 'churn') as Partial<ChurnConfig> | undefined,
     scope: scopeSection(parsed),
+    knip: knipSection(parsed),
   };
+}
+
+function knipSection(parsed: Record<string, unknown>): Partial<KnipConfig> | undefined {
+  const knip = numberSection(parsed, 'knip');
+  if (knip !== undefined) assertKnownKeys('knip', knip, Object.keys(DEFAULT_KNIP));
+  return knip as Partial<KnipConfig> | undefined;
 }
 
 export interface ResolvedConfig {
@@ -260,6 +283,7 @@ export interface ResolvedConfig {
   rules: RuleSwitches;
   scope: ScopeConfig;
   churn: ChurnConfig;
+  knip: KnipConfig;
 }
 
 export function resolveConfig(config: ProjectConfig): ResolvedConfig {
@@ -269,6 +293,7 @@ export function resolveConfig(config: ProjectConfig): ResolvedConfig {
     reportThresholds: { ...DEFAULT_REPORT_THRESHOLDS, ...config.reportThresholds },
     rules: { ...allDisabled, ...config.rules },
     churn: { ...defaultChurn(), ...config.churn },
+    knip: { ...DEFAULT_KNIP, ...config.knip },
     scope: {
       include: config.scope?.include ?? defaultScope().include,
       exclude: config.scope?.exclude ?? defaultScope().exclude,

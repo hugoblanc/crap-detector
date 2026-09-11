@@ -3,10 +3,12 @@
  * Aucune logique ici : uniquement des types.
  */
 import type { ThresholdsSnapshot } from './config.js';
+import type { DeadCodeSummary, KnipReliability } from './dead-code.js';
 import type { Finding } from './findings.js';
 import type { BaselineScope, ReportScope } from './scope.js';
 
 export type { Finding, Severity, ToolId } from './findings.js';
+export type { DeadCodeSummary } from './dead-code.js';
 
 export interface FunctionMetrics {
   symbol: string;
@@ -95,22 +97,16 @@ export interface ImportsReport extends ReportEnvelope {
   findings: Finding[];
 }
 
-export interface DeadCodeSummary {
-  unusedFiles: number;
-  unusedExports: number;
-  /** Absent quand la règle unused-type est désactivée : non mesuré. */
-  unusedTypes?: number;
-  unusedDependencies: number;
-}
-
 export interface DeadCodeReport extends ReportEnvelope {
   /** false = outil absent ou sortie illisible ; l'analyse continue sans lui. */
   available: boolean;
   unavailableReason?: string;
+  /** Ce que knip signale dans le périmètre, fiable ou non ; `findings` ne garde que ce qui est compté. */
   summary: DeadCodeSummary;
   findings: Finding[];
   /** Findings écartés parce que leur fichier est hors du périmètre ; knip, lui, lit tout le projet. */
   outOfScope: number;
+  reliability?: KnipReliability;
 }
 
 export interface DuplicationStatistics {

@@ -4,7 +4,7 @@
 > Le chemin rapide `crap-detector file`, celui du hook, tourne en environ 200 ms sur un fichier.
 > Le scan complet tourne en 5 à 10 secondes et sous 600 Mo sur des dépôts de 700 à 800 fichiers.
 > Les fichiers chargés par convention (migrations, tests e2e, scripts) sortent en `unused-file`
-> tant que le dépôt n'a pas de `knip.json` qui les déclare : voir [Code mort](#ce-qui-est-mesuré)
+> tant que le dépôt n'a pas de `knip.json` qui les déclare : voir [Configurer knip](#configurer-knip)
 > et les [issues ouvertes](https://github.com/hugoblanc/crap-detector/issues).
 > À utiliser en local, à titre indicatif, pas encore comme gate de CI.
 
@@ -115,21 +115,40 @@ Les tests restent hors mesure mais comptent alors comme importeurs : un module u
 Seuls ses findings sur les fichiers du périmètre sont gardés, avec les dépendances du `package.json` qui les gouverne.
 Le résumé dit combien de findings ont été écartés comme hors périmètre.
 
-`unused-file` et `unused-export` ne valent que ce que knip sait des points d'entrée.
-Sans `knip.json`, il ne connaît que ceux du `package.json` et de ses plugins : tout fichier chargé autrement paraît mort.
-Avant d'utiliser ces règles comme gate, déclarer dans un `knip.json` (champs `entry` et `project`) les points d'entrée invisibles :
-
-- scripts lancés par leur chemin, depuis un shell ou une CI ; un script importé seulement par un autre script sort aussi tant que le premier n'est pas déclaré ;
-- migrations et seeds chargées par glob, comme celles de TypeORM ;
-- fichiers désignés dans une config, par exemple un setup Vitest passé par `path.resolve` ;
-- configs de test passées en argument, comme `jest --config test/jest-e2e.json`, que knip ne lit pas : ses specs e2e sortent sinon en `unused-file` ;
-- fichiers chargés par la plateforme de déploiement, comme un `middleware.ts` Vercel dans une app Vite.
+`unused-file`, `unused-export` et `unused-dependency` ne valent que ce que knip sait des points d'entrée : voir [Configurer knip](#configurer-knip).
 
 **Monorepo.** knip lancé depuis la racine d'un dépôt dont les workspaces ne sont pas déclarés juge tout contre la racine : sur un monorepo pnpm sans `packages` dans `pnpm-workspace.yaml`, il a signalé comme inutilisés des centaines de fichiers d'un sous-projet Vite, contre quelques-uns lancé depuis le dossier du sous-projet.
 Quand des sous-dossiers du périmètre ont leur propre `package.json`, le résumé les liste : scanner chacun séparément avec `--root <dossier>`.
 
 **Contre-mesures au gaming.** `functionsPerFile` et `medianFunctionSloc` : un agent qui
 saucissonne pour passer sous un seuil fait monter le premier et chuter le second.
+
+## Configurer knip
+
+Sans configuration, knip ne connaît que les points d'entrée du `package.json` et de ses plugins : tout fichier chargé autrement paraît mort, avec ses exports et ses dépendances.
+Déclarer dans un `knip.json` (champs `entry` et `project`) les points d'entrée invisibles :
+
+- scripts lancés par leur chemin, depuis un shell ou une CI ; un script importé seulement par un autre script sort aussi tant que le premier n'est pas déclaré ;
+- serveur lancé par un script que knip ne suit pas, comme une commande de framework : ses modules sortent tous en `unused-file` ;
+- migrations et seeds chargées par glob, comme celles de TypeORM ;
+- fichiers désignés dans une config, par exemple un setup Vitest passé par `path.resolve` ;
+- configs de test passées en argument, comme `jest --config test/jest-e2e.json`, que knip ne lit pas : ses specs e2e sortent sinon en `unused-file` ;
+- fichiers chargés par la plateforme de déploiement, comme un `middleware.ts` Vercel dans une app Vite.
+
+knip lit sa configuration à la racine analysée : `knip.json`, `knip.jsonc`, `.knip.json`, `.knip.jsonc`, `knip.ts`, `knip.js`, `knip.config.ts`, `knip.config.js`, ou la clé `knip` du `package.json`.
+Tant qu'il n'y en a aucune, le résumé de `scan` le signale.
+
+**Rapport jugé non fiable.** Quand plus d'un tiers des fichiers du périmètre sortent en `unused-file`, knip est jugé non fiable sur ce dépôt.
+Ses findings `unused-file`, `unused-export`, `unused-type` et `unused-dependency` ne sont alors ni affichés ni comptés : ni agrégat `deadcode.*`, ni dette dans la baseline.
+Le résumé texte et le champ `deadCode.reliability` du JSON disent combien de findings ont été écartés.
+Les autres findings de knip, comme `unlisted-dependency`, et les autres outils ne changent pas.
+
+Sur cinq dépôts réels sans configuration knip, la part de fichiers signalés inutilisés allait de 0,5 % à 14,5 % quand knip trouvait ses points d'entrée.
+Sur un serveur dont il ratait l'entrée, elle montait à 50,5 % : 376 fichiers sur 744, dont les 8 vérifiés à la main étaient tous atteignables.
+Un tiers laisse de la marge des deux côtés.
+
+Un dépôt dont plus d'un tiers du code est vraiment mort voit aussi ce code masqué.
+Le seuil se relève dans `crap-detector.json`, par exemple `"knip": { "maxUnusedFileFraction": 1 }` pour toujours juger knip fiable.
 
 ## Règles par défaut
 
@@ -212,7 +231,9 @@ Cinq règles la gardent honnête :
   écrite sans lui (hors dépôt, ou avant qu'il existe) ne se compare pas à un scan qui l'applique.
   Il inclut aussi la restriction de `knip` et `jscpd` au périmètre : une baseline écrite quand ils comptaient hors périmètre ne se compare pas non plus.
   De même pour une baseline écrite avant les règles d'imports actuelles (`importRules`) : ses faux positifs de dépendances laisseraient de la marge à un vrai paquet inventé.
-  De même enfin quand les règles optionnelles activées diffèrent (`rules`), ou pour une baseline écrite avant leur sélection, qui les comptait toutes.
+  De même quand les règles optionnelles activées diffèrent (`rules`), ou pour une baseline écrite avant leur sélection, qui les comptait toutes.
+  De même enfin quand knip est jugé fiable d'un côté et non fiable de l'autre (`knipTrusted`) : sinon une avalanche de fichiers morts ferait passer tout le code mort pour corrigé, et le gate s'éteindrait sans échouer.
+  Une baseline écrite avant ce jugement compte comme fiable ; une commande où knip n'a pas tourné ne compare pas ce jugement.
 
 ## Configuration
 
@@ -257,6 +278,9 @@ Cinq règles la gardent honnête :
     "maxFilesPerCommit": 50,
     "minCoChangeCommits": 5,
     "minCoChangeDegree": 0.5
+  },
+  "knip": {
+    "maxUnusedFileFraction": 0.33
   }
 }
 ```

@@ -21,6 +21,11 @@ export interface BaselineScope {
   importRules: 2;
   /** Règles optionnelles activées, triées ; absent des baselines antérieures, qui les comptaient toutes. */
   rules: string[];
+  /**
+   * false : knip jugé non fiable, son code mort n'est pas compté. Absent quand knip n'a pas tourné,
+   * et des baselines antérieures, qui comptaient tout ce qu'il signalait.
+   */
+  knipTrusted?: boolean;
 }
 
 export interface ReportScope extends BaselineScope {
@@ -30,8 +35,8 @@ export interface ReportScope extends BaselineScope {
 }
 
 export function baselineScope(scope: ReportScope): BaselineScope {
-  const { include, exclude, gitignore, toolsScoped, importRules, rules } = scope;
-  return { include: [...include], exclude: [...exclude], gitignore, toolsScoped, importRules, rules: [...rules] };
+  const { include, exclude, gitignore, toolsScoped, importRules, rules, knipTrusted } = scope;
+  return { include: [...include], exclude: [...exclude], gitignore, toolsScoped, importRules, rules: [...rules], knipTrusted };
 }
 
 function sameList(a: string[], b: string[]): boolean {
@@ -59,7 +64,25 @@ export function scopeIncompatibility(
   if (scope.importRules !== 2) {
     return 'la baseline compte orphelins et paquets non déclarés avec les règles antérieures : refaire la baseline';
   }
-  return gitignoreIncompatibility(scope, current) ?? rulesIncompatibility(scope, current);
+  return gitignoreIncompatibility(scope, current) ?? rulesIncompatibility(scope, current) ?? knipIncompatibility(baseline, current);
+}
+
+/**
+ * Un rapport knip non fiable n'est pas compté : comparé à une baseline qui le comptait, tout son code mort
+ * passerait pour corrigé, et une avalanche de fichiers morts éteindrait le gate sans échec. Dans l'autre
+ * sens, il passerait pour nouveau. Une baseline antérieure à ce jugement comptait tout, comme un rapport fiable.
+ */
+function knipIncompatibility(
+  baseline: { scope: BaselineScope; toolVersions: Record<string, string> },
+  current: ReportScope,
+): string | undefined {
+  if (baseline.toolVersions['knip'] === undefined || current.knipTrusted === undefined) return undefined;
+  const trustedBefore = baseline.scope.knipTrusted ?? true;
+  if (trustedBefore === current.knipTrusted) return undefined;
+  return trustedBefore
+    ? 'knip est jugé non fiable sur ce scan (voir crap-detector scan), la baseline comptait son code mort : '
+      + 'déclarer ses points d\'entrée dans un knip.json, ou refaire la baseline sans son code mort'
+    : 'knip est désormais jugé fiable, la baseline ne comptait pas son code mort : refaire la baseline';
 }
 
 function gitignoreIncompatibility(scope: BaselineScope, current: ReportScope): string | undefined {
