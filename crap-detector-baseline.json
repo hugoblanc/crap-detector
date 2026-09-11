@@ -9,7 +9,7 @@
     "knip": "6.32.2",
     "jscpd": "5.0.16"
   },
-  "createdAt": "2026-09-11T09:53:14.886Z",
+  "createdAt": "2026-09-11T10:05:49.030Z",
   "thresholds": {
     "cyclomaticComplexity": 10,
     "cognitiveComplexity": 15,
@@ -47,20 +47,22 @@
     "importRules": 2
   },
   "aggregates": {
-    "erosion.fraction": 0.279005,
+    "erosion.fraction": 0.277197,
     "erosion.mass": 1179.557811,
-    "verbosity.fraction": 0.000835,
+    "verbosity.fraction": 0.00083,
     "verbosity.lines": 4,
     "duplication.percent": 0,
     "duplication.lines": 0,
     "deadcode.exports.count": 6,
     "deadcode.files.count": 0,
     "cycles.count": 0,
-    "coupling.hidden.count": 0,
+    "coupling.hidden.count": 3,
     "imports.unknown.count": 0,
     "typesafety.escapes.count": 0
   },
   "debtCounts": {
+    "churn|hidden-coupling|src/baseline/baseline.ts": 2,
+    "churn|hidden-coupling|src/cli/render.ts": 1,
     "knip|unused-dependency|package.json": 1,
     "knip|unused-export|src/baseline/baseline.ts": 2,
     "knip|unused-export|src/churn/git.ts": 1,
