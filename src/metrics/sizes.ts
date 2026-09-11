@@ -27,8 +27,9 @@ function slocLines(sourceFile: SourceFile): Set<number> {
 }
 
 /**
- * Ne garde, par fichier, que les lignes comptées dans le SLOC. Une plage de clone couvre
- * aussi des lignes blanches : sans ce filtre, la verbosité diviserait des lignes brutes par du SLOC.
+ * Ne garde, par fichier, que les lignes comptées dans le SLOC. Une plage de nœud AST ou de
+ * clone couvre aussi des lignes blanches : sans ce filtre, la verbosité diviserait des lignes
+ * brutes par du SLOC.
  */
 export function keepSlocLines(
   byFile: Map<string, Set<number>>,

@@ -169,26 +169,31 @@ function readJsonObject(path: string): Record<string, unknown> | undefined {
 }
 
 /**
- * Config jscpd du dépôt analysé, cherchée dans l'ordre de jscpd lui-même (load_config,
- * cli.rs) : un fichier absent ou illisible passe au suivant.
+ * Config jscpd du dépôt analysé, là où jscpd 5.0.16 la cherche : `.jscpd.json`, sinon la
+ * clé `jscpd` du package.json. Les `.config/jscpd.json` du code source actuel de jscpd ne
+ * sont pas lus par cette version (vérifié avec --debug).
  */
 function projectConfig(root: string): Record<string, unknown> {
-  for (const candidate of ['.jscpd.json', '.config/jscpd.json', '.config/.jscpd.json']) {
-    const config = readJsonObject(join(root, candidate));
-    if (config !== undefined) return config;
-  }
+  const config = readJsonObject(join(root, '.jscpd.json'));
+  if (config !== undefined) return config;
   const embedded = readJsonObject(join(root, 'package.json'))?.['jscpd'];
   return typeof embedded === 'object' && embedded !== null ? (embedded as Record<string, unknown>) : {};
 }
 
 /**
  * `--config` coupe la recherche automatique de jscpd : la config du dépôt (ignore,
- * ignorePattern…) est donc recopiée, seule la liste de fichiers est remplacée. La liste
- * passe par ce fichier parce qu'en arguments, elle dépasse vite ARG_MAX.
+ * ignorePattern…) est donc recopiée, avec la liste de fichiers à la place de `path`.
+ * exitCode et threshold sont neutralisés : un code de sortie non nul ferait passer jscpd
+ * pour en échec. La liste passe par ce fichier parce qu'en arguments, elle dépasse vite ARG_MAX.
  */
 function jscpdArgs(outputDir: string, root: string, files: readonly string[]): string[] {
   const configPath = join(outputDir, 'jscpd-scope.json');
-  const config = { ...projectConfig(root), path: files.map((file) => join(root, file)) };
+  const config = {
+    ...projectConfig(root),
+    path: files.map((file) => join(root, file)),
+    exitCode: null,
+    threshold: null,
+  };
   writeFileSync(configPath, JSON.stringify(config), 'utf8');
   return [
     '--config', configPath,

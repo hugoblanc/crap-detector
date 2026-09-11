@@ -238,6 +238,23 @@ describe('scanFull', () => {
     expect(report.aggregates['verbosity.fraction']).toBeGreaterThan(0.9);
     expect(report.aggregates['verbosity.fraction']).toBeLessThanOrEqual(1);
   }, 180_000);
+
+  it('garde la verbosité sous 1 sans jscpd quand un catch vide couvre des lignes blanches', async () => {
+    const swallowed = Array.from({ length: 10 }, (_, i) => [
+      `export function attempt${String(i)}(): void {`,
+      '  try { risky(); } catch {',
+      ...Array.from({ length: 9 }, () => ''),
+      '  }',
+      '}',
+    ].join('\n')).join('\n');
+    const root = makeRoot({
+      'package.json': PROJECT['package.json'],
+      'src/risky.ts': `declare function risky(): void;\n${swallowed}\n`,
+    });
+    const report = await scanFull(root, config, { skipChurn: true, skipExternalTools: true });
+    expect(report.aggregates['verbosity.fraction']).toBeGreaterThan(0);
+    expect(report.aggregates['verbosity.fraction']).toBeLessThanOrEqual(1);
+  });
 });
 
 describe('assertRatiosInRange', () => {

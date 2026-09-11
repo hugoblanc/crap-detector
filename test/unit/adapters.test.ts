@@ -314,6 +314,17 @@ describe('analyzeDuplication sur un vrai projet', () => {
     }
   }, 120_000);
 
+  it('neutralise exitCode et threshold du dépôt, qui feraient passer jscpd pour en échec', () => {
+    const root = makeRoot({
+      'src/a.ts': `${block}\n`,
+      'src/b.ts': `${block.replace('compute', 'computeAgain')}\n`,
+      '.jscpd.json': JSON.stringify({ exitCode: 3, threshold: 0 }),
+    });
+    const { report } = analyzeDuplication(root, ['src/a.ts', 'src/b.ts']);
+    expect(report.available).toBe(true);
+    expect(report.statistics.clones).toBeGreaterThanOrEqual(1);
+  }, 120_000);
+
   it('ne lance pas jscpd sur un périmètre vide, qui lui ferait lire toute la racine', () => {
     const root = makeRoot({ 'copie/a.ts': `${block}\n`, 'copie/b.ts': `${block}\n` });
     const { report } = analyzeDuplication(root, []);

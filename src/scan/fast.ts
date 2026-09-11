@@ -75,7 +75,7 @@ export function scanFast(rootPath: string, config: ResolvedConfig, ignored?: Ign
     findings: findingsForFiles(fileMetrics, config),
   };
 
-  const slopAnalysis = analyzeSlop(rootPath, sourceFiles, summary.totalSloc);
+  const slopAnalysis = analyzeSlop(rootPath, sourceFiles);
   const slop = slopAnalysis.report;
   const importAnalysis = analyzeImports(rootPath, sourceFiles);
   const dependencies = analyzeGraph(rootPath, importAnalysis.graph);

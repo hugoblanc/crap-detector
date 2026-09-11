@@ -274,12 +274,20 @@ describe('slopFindings', () => {
 });
 
 describe('summarizeSlop', () => {
+  /** Fichier dont les lignes `blank` sont vides et toutes les autres portent du code. */
+  function sources(lines: number, blank: number[] = []): Map<string, SourceFile> {
+    const text = Array.from({ length: lines }, (_, index) =>
+      (blank.includes(index + 1) ? '' : `const v${String(index)} = ${String(index)};`)).join('\n');
+    return new Map([['a.ts', parse(text, 'a.ts')]]);
+  }
+
   it('calcule la fraction de verbosité sur le SLOC total', () => {
     const hits: SlopHit[] = [
       { rule: 'assign-then-return', file: 'a.ts', line: 1, endLine: 2, symbol: 'f', severity: 'minor', message: '' },
       { rule: 'type-escape-any', file: 'a.ts', line: 5, endLine: 5, symbol: 'f', severity: 'major', message: '' },
     ];
-    const summary = summarizeSlop(hits, 20);
+    const summary = summarizeSlop(hits, sources(20));
+    expect(summary.totalSloc).toBe(20);
     expect(summary.verboseLines).toBe(2);
     expect(summary.verbosityFraction).toBeCloseTo(0.1, 10);
     expect(summary.typeEscapes).toBe(1);
@@ -290,14 +298,26 @@ describe('summarizeSlop', () => {
     const hits: SlopHit[] = [
       { rule: 'assign-then-return', file: 'a.ts', line: 1, endLine: 2, symbol: 'f', severity: 'minor', message: '' },
     ];
-    const summary = summarizeSlop(hits, 20, {
+    const summary = summarizeSlop(hits, sources(20), {
       cloneLines: new Map([['a.ts', new Set([2, 3, 4])]]),
     });
     expect(summary.verboseLines).toBe(4);
   });
 
+  it('ne compte pas les lignes blanches des plages, ni pour un hit ni pour un clone', () => {
+    const hits: SlopHit[] = [
+      { rule: 'empty-catch', file: 'a.ts', line: 1, endLine: 10, symbol: 'f', severity: 'major', message: '' },
+    ];
+    const summary = summarizeSlop(hits, sources(12, [2, 3, 4, 5, 6, 7, 8, 9, 11]), {
+      cloneLines: new Map([['a.ts', new Set([10, 11, 12])]]),
+    });
+    expect(summary.totalSloc).toBe(3);
+    expect(summary.verboseLines).toBe(3);
+    expect(summary.verbosityFraction).toBe(1);
+  });
+
   it('rend 0 sur un projet vide sans diviser par zéro', () => {
-    expect(summarizeSlop([], 0).verbosityFraction).toBe(0);
+    expect(summarizeSlop([], new Map()).verbosityFraction).toBe(0);
   });
 });
 
@@ -308,7 +328,7 @@ describe('analyzeSlop', () => {
       ['src/a.ts', project.createSourceFile('src/a.ts', 'export function f(x: any): any { return x; }\n')],
       ['src/b.ts', project.createSourceFile('src/b.ts', 'export const clean = (n: number): number => n + 1;\n')],
     ]);
-    const { report, hits } = analyzeSlop('/repo', sources, 10);
+    const { report, hits } = analyzeSlop('/repo', sources);
     expect(hits).toHaveLength(2);
     expect(report.toolVersion).toBe('ts-morph');
     expect(report.summary.typeEscapes).toBe(2);

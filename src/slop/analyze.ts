@@ -11,6 +11,7 @@
 import type { SourceFile } from 'ts-morph';
 import { compareFindings, envelope, makeFinding } from '../core/findings.js';
 import type { Finding, Severity, SlopReport, SlopSummary } from '../core/types.js';
+import { fileSloc, keepSlocLines } from '../metrics/sizes.js';
 import type { SlopHit } from './rules.js';
 import { TYPE_ESCAPE_RULES, VERBOSITY_RULES, slopHits } from './rules.js';
 
@@ -108,13 +109,19 @@ export interface SlopOptions {
   cloneLines?: Map<string, Set<number>>;
 }
 
+/**
+ * `sourceFiles` donne le dénominateur et filtre le numérateur : les plages des nœuds AST
+ * et des clones couvrent aussi des lignes blanches, que le SLOC ne compte pas. Sans ce
+ * filtre, un catch vide suivi de lignes blanches fait dépasser 1 à la fraction.
+ */
 export function summarizeSlop(
   hits: SlopHit[],
-  totalSloc: number,
+  sourceFiles: Map<string, SourceFile>,
   options: SlopOptions = {},
 ): SlopSummary {
   const verbose = mergeLineSets(verbosityLines(hits), options.cloneLines ?? new Map());
-  const verboseLines = countLines(verbose);
+  const verboseLines = countLines(keepSlocLines(verbose, sourceFiles));
+  const totalSloc = [...sourceFiles.values()].reduce((sum, source) => sum + fileSloc(source), 0);
   const byRule: Record<string, number> = {};
   for (const entry of hits) byRule[entry.rule] = (byRule[entry.rule] ?? 0) + 1;
   return {
@@ -136,7 +143,6 @@ export interface SlopAnalysis {
 export function analyzeSlop(
   rootPath: string,
   sourceFiles: Map<string, SourceFile>,
-  totalSloc: number,
   options: SlopOptions = {},
 ): SlopAnalysis {
   const hits: SlopHit[] = [];
@@ -146,7 +152,7 @@ export function analyzeSlop(
   return {
     report: {
       ...envelope(rootPath, 'ts-morph'),
-      summary: summarizeSlop(hits, totalSloc, options),
+      summary: summarizeSlop(hits, sourceFiles, options),
       findings: slopFindings(hits),
     },
     hits,

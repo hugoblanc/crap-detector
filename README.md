@@ -101,7 +101,7 @@ slopsquatting, quand un agent invente une dépendance plausible.
 connexes, Tarjan itératif).
 
 **Code mort et duplication**, via `knip` et `jscpd`, sur le même périmètre que l'analyse AST.
-`jscpd` ne reçoit que les fichiers du périmètre, et garde la config du dépôt (`.jscpd.json`, `.config/jscpd.json` ou clé `jscpd` du `package.json`).
+`jscpd` ne reçoit que les fichiers du périmètre, et garde la config du dépôt (`.jscpd.json` ou clé `jscpd` du `package.json`), sauf `exitCode` et `threshold`.
 `knip` lit tout le projet, pour que les tests, les points d'entrée et les conventions de framework comptent comme importeurs.
 Seuls ses findings sur les fichiers du périmètre sont gardés, avec les dépendances du `package.json` qui les gouverne.
 Le résumé dit combien de findings ont été écartés comme hors périmètre.

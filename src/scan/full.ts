@@ -11,7 +11,6 @@ import type { ResolvedConfig } from '../core/config.js';
 import type { ReportScope } from '../core/scope.js';
 import type { AggregateKey, Aggregates, Finding, ScanReport } from '../core/types.js';
 import type { GitIgnoredResult } from '../churn/git.js';
-import { keepSlocLines } from '../metrics/sizes.js';
 import { summarizeSlop } from '../slop/analyze.js';
 import { scanFast } from './fast.js';
 import type { FastScan } from './fast.js';
@@ -111,9 +110,7 @@ async function addExternalTools(rootPath: string, fast: FastScan, report: ScanRe
   aggregates['duplication.lines'] = duplication.report.statistics.duplicatedLines;
   findings.push(...duplication.report.findings);
   // Les lignes clonées entrent dans la verbosité : le score AST seul la sous-estime.
-  const summary = summarizeSlop(fast.slopHits, fast.metrics.summary.totalSloc, {
-    cloneLines: keepSlocLines(duplication.cloneLines, fast.sourceFiles),
-  });
+  const summary = summarizeSlop(fast.slopHits, fast.sourceFiles, { cloneLines: duplication.cloneLines });
   report.slop = { ...fast.slop, summary };
   aggregates['verbosity.fraction'] = summary.verbosityFraction;
   aggregates['verbosity.lines'] = summary.verboseLines;
