@@ -81,8 +81,9 @@ export function fileImports(sourceFile: SourceFile): ImportRef[] {
  * Modules encore importés une fois les types effacés, d'après l'émission de TypeScript : un
  * import utilisé seulement en position de type disparaît, son paquet n'est pas chargé à
  * l'exécution. Transpilation d'un fichier seul, sans métadonnées de décorateurs.
+ * Avec `verbatimModuleSyntax` du projet, seul `import type` s'efface.
  */
-export function runtimeImports(sourceFile: SourceFile): Set<string> {
+export function runtimeImports(sourceFile: SourceFile, verbatimModuleSyntax = false): Set<string> {
   const { outputText } = ts.transpileModule(sourceFile.getFullText(), {
     fileName: sourceFile.getBaseName(),
     compilerOptions: {
@@ -90,6 +91,7 @@ export function runtimeImports(sourceFile: SourceFile): Set<string> {
       target: ts.ScriptTarget.ESNext,
       jsx: ts.JsxEmit.Preserve,
       experimentalDecorators: true,
+      verbatimModuleSyntax,
     },
   });
   return new Set(ts.preProcessFile(outputText, true, true).importedFiles.map((ref) => ref.fileName));

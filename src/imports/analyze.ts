@@ -41,11 +41,9 @@ function existsOnDisk(rootPath: string, fromFile: string, specifier: string): bo
 
 /** Résolvable comme Node le chercherait : node_modules de chaque dossier parent, jusqu'à la racine du disque. */
 function isInstalled(rootPath: string, file: string, packageName: string): boolean {
-  const candidates = [packageName, typesPackageOf(packageName)];
   let dir = dirname(join(rootPath, file));
   for (;;) {
-    const modules = join(dir, 'node_modules');
-    if (candidates.some((candidate) => existsSync(join(modules, candidate)))) return true;
+    if (existsSync(join(dir, 'node_modules', packageName))) return true;
     const parent = dirname(dir);
     if (parent === dir) return false;
     dir = parent;
@@ -61,14 +59,15 @@ export interface DependencyContext {
 }
 
 export function dependencyContext(rootPath: string, sourceFiles: Map<string, SourceFile>): DependencyContext {
+  const manifestFor = manifestResolver(rootPath);
   const runtime = new Map<string, Set<string>>();
   return {
     rootPath,
-    manifestFor: manifestResolver(rootPath),
+    manifestFor,
     isRuntimeImport: (file, specifier) => {
       const source = sourceFiles.get(file);
       if (source === undefined) return true;
-      const kept = runtime.get(file) ?? runtimeImports(source);
+      const kept = runtime.get(file) ?? runtimeImports(source, manifestFor(file).verbatimModuleSyntax);
       runtime.set(file, kept);
       return kept.has(specifier);
     },
@@ -95,6 +94,13 @@ const UNDECLARED: Record<'installed' | 'missing', UndeclaredKind> = {
   },
 };
 
+/** Rien d'inventé : le paquet est installé, ou son seul @types l'est pour un import de types seuls. */
+function isResolvable(context: DependencyContext, file: string, specifier: string): boolean {
+  const packageName = packageNameOf(specifier);
+  if (isInstalled(context.rootPath, file, packageName)) return true;
+  return isInstalled(context.rootPath, file, typesPackageOf(packageName)) && !context.isRuntimeImport(file, specifier);
+}
+
 /**
  * Import de paquet non déclaré dans le package.json le plus proche du fichier. Un import de
  * types seuls couvert par un `@types/` déclaré ne charge rien à l'exécution : pas de finding.
@@ -108,7 +114,7 @@ export function dependencyFinding(context: DependencyContext, file: string, ref:
   if (isDeclared(manifest, ref.specifier, packageName)) return undefined;
   const typesDeclared = manifest.dependencies.has(typesPackageOf(packageName));
   if (typesDeclared && !context.isRuntimeImport(file, ref.specifier)) return undefined;
-  const installed = ref.specifierKind === 'bare' && isInstalled(context.rootPath, file, packageName);
+  const installed = ref.specifierKind === 'bare' && isResolvable(context, file, ref.specifier);
   const kind = UNDECLARED[installed ? 'installed' : 'missing'];
   return makeFinding({
     tool: 'imports',

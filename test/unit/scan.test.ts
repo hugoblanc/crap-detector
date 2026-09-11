@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { renderSummary } from '../../src/cli/render.js';
 import { resolveConfig } from '../../src/core/config.js';
 import { makeFinding } from '../../src/core/findings.js';
+import { subprojectDirs } from '../../src/imports/manifest.js';
 import { scanFast, scanFile } from '../../src/scan/fast.js';
 import { assertRatiosInRange, scanFull, withoutNativeDuplicates } from '../../src/scan/full.js';
 
@@ -122,6 +123,26 @@ describe('scanFile', () => {
     expect(scanFile(root, 'src/typed.ts', config).findings).toEqual([]);
     expect(scanFile(root, 'src/runtime.ts', config).findings.map((finding) => finding.rule))
       .toEqual(['unknown-dependency']);
+  });
+
+  it('juge comme valeur un import de type non marqué quand le projet active verbatimModuleSyntax', () => {
+    const root = makeRoot({
+      'package.json': JSON.stringify({ devDependencies: { '@types/express': '5.0.0' } }),
+      'tsconfig.json': JSON.stringify({ compilerOptions: { verbatimModuleSyntax: true } }),
+      'src/typed.ts': "import { Request } from 'express';\nexport const path = (req: Request): string => req.path;\n",
+    });
+    expect(scanFile(root, 'src/typed.ts', config).findings.map((finding) => finding.rule))
+      .toEqual(['unknown-dependency']);
+  });
+
+  it('ne prend pas un package.json marqueur de format pour un sous-projet', () => {
+    const root = makeRoot({
+      'package.json': JSON.stringify({ name: 'p4', dependencies: { 'real-dep': '1.0.0' } }),
+      'src/esm/package.json': JSON.stringify({ type: 'module' }),
+      'src/esm/worker.ts': "import { run } from 'real-dep';\nexport const work = run;\n",
+    });
+    expect(scanFile(root, 'src/esm/worker.ts', config).findings).toEqual([]);
+    expect(subprojectDirs(root, ['src/esm/worker.ts'])).toEqual([]);
   });
 });
 
@@ -329,7 +350,7 @@ describe('withoutNativeDuplicates', () => {
     const unlisted = (file: string) => makeFinding({
       tool: 'knip', rule: 'unlisted-dependency', file, symbol: 'express', message: 'non déclaré',
     });
-    const root = makeRoot({ 'app/package.json': '{}', 'app/a.ts': '', 'loose/b.ts': '' });
+    const root = makeRoot({ 'app/package.json': '{"name":"app"}', 'app/a.ts': '', 'loose/b.ts': '' });
     const deadCode = {
       generatorVersion: '0.1.0', generatedAt: '', rootPath: root, toolVersion: '6.32.2', available: true,
       summary: { unusedFiles: 0, unusedExports: 0, unusedTypes: 0, unusedDependencies: 0 },

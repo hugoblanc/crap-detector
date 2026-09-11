@@ -8,7 +8,7 @@
  * la règle se désactive au lieu de deviner.
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 
 export interface Manifest {
   /** Dossier du package.json, relatif à la racine ; '' pour la racine. */
@@ -23,6 +23,8 @@ export interface Manifest {
   pathMappings: PathMapping[];
   /** compilerOptions.baseUrl, relatif à la racine du projet. */
   baseUrl: string;
+  /** compilerOptions.verbatimModuleSyntax : un import non marqué `type` survit à l'émission. */
+  verbatimModuleSyntax: boolean;
   /**
    * false quand un fichier de config existe mais n'a pas pu être lu :
    * la détection de dépendances inconnues est alors désactivée.
@@ -134,6 +136,7 @@ function readTsconfig(rootPath: string, dir: string, manifest: Manifest): string
     if (!isPlainObject(parsed)) throw new Error(`${label} ne contient pas un objet`);
     const compilerOptions = parsed['compilerOptions'];
     if (!isPlainObject(compilerOptions)) return undefined;
+    manifest.verbatimModuleSyntax = compilerOptions['verbatimModuleSyntax'] === true;
     const baseUrl = compilerOptions['baseUrl'];
     if (typeof baseUrl === 'string') manifest.baseUrl = baseUrl;
     const paths = compilerOptions['paths'];
@@ -160,6 +163,7 @@ export function readManifest(rootPath: string, packageDir = '', tsconfigDir = pa
     pathAliases: [],
     pathMappings: [],
     baseUrl: '',
+    verbatimModuleSyntax: false,
     trustworthy: true,
   };
   const failure = readPackage(rootPath, packageDir, manifest) ?? readTsconfig(rootPath, tsconfigDir, manifest);
@@ -170,38 +174,58 @@ export function readManifest(rootPath: string, packageDir = '', tsconfigDir = pa
   return manifest;
 }
 
-/** Dossier du fichier `name` le plus proche au-dessus de `file`, sans sortir de la racine. */
-function nearestDir(rootPath: string, file: string, name: string): string | undefined {
+/**
+ * Un package.json sans `name` ni section de dépendances, comme `{"type":"module"}`, règle
+ * seulement le format des modules d'un dossier : ce n'est pas un projet.
+ */
+function isProjectPackage(path: string): boolean {
+  if (!existsSync(path)) return false;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    if (!isPlainObject(parsed)) return true;
+    return parsed['name'] !== undefined || DEPENDENCY_SECTIONS.some((section) => parsed[section] !== undefined);
+  } catch {
+    // Illisible : il compte quand même, et son manifeste non fiable fait taire la règle.
+    return true;
+  }
+}
+
+/** Dossier le plus proche au-dessus de `file` dont le fichier `name` est retenu, sans sortir de la racine. */
+function nearestDir(rootPath: string, file: string, name: string, retains: (path: string) => boolean): string | undefined {
   const segments = file.split('/').slice(0, -1);
   for (let depth = segments.length; depth >= 0; depth -= 1) {
     const dir = segments.slice(0, depth).join('/');
-    if (existsSync(join(rootPath, dir, name))) return dir;
+    if (retains(join(rootPath, dir, name))) return dir;
   }
   return undefined;
 }
 
 /**
- * Manifeste qui gouverne chaque fichier : package.json le plus proche pour les dépendances,
- * tsconfig.json le plus proche pour les alias. Un sous-projet est jugé contre ses propres
- * déclarations, pas contre celles de la racine.
+ * Manifeste qui gouverne chaque fichier : package.json de projet le plus proche pour les
+ * dépendances, tsconfig.json le plus proche pour les alias. Un sous-projet est jugé contre ses
+ * propres déclarations, pas contre celles de la racine.
  */
 export function manifestResolver(rootPath: string): (file: string) => Manifest {
-  const cache = new Map<string, Manifest>();
+  const byDirs = new Map<string, Manifest>();
+  const byDirectory = new Map<string, Manifest>();
   return (file) => {
-    const packageDir = nearestDir(rootPath, file, 'package.json') ?? '';
-    const tsconfigDir = nearestDir(rootPath, file, 'tsconfig.json') ?? packageDir;
+    const directory = posix.dirname(file);
+    const known = byDirectory.get(directory);
+    if (known !== undefined) return known;
+    const packageDir = nearestDir(rootPath, file, 'package.json', isProjectPackage) ?? '';
+    const tsconfigDir = nearestDir(rootPath, file, 'tsconfig.json', existsSync) ?? packageDir;
     const key = `${packageDir}\n${tsconfigDir}`;
-    const cached = cache.get(key);
-    if (cached !== undefined) return cached;
-    const manifest = readManifest(rootPath, packageDir, tsconfigDir);
-    cache.set(key, manifest);
+    const manifest = byDirs.get(key) ?? readManifest(rootPath, packageDir, tsconfigDir);
+    byDirs.set(key, manifest);
+    byDirectory.set(directory, manifest);
     return manifest;
   };
 }
 
 /** Sous-dossiers qui portent le package.json d'au moins un fichier : autant de projets à scanner à part. */
 export function subprojectDirs(rootPath: string, files: readonly string[]): string[] {
-  const dirs = new Set(files.map((file) => nearestDir(rootPath, file, 'package.json') ?? ''));
+  const manifestFor = manifestResolver(rootPath);
+  const dirs = new Set(files.map((file) => manifestFor(file).dir));
   dirs.delete('');
   return [...dirs].sort();
 }

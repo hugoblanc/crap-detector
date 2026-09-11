@@ -245,6 +245,7 @@ describe('isDeclared', () => {
     pathAliases: ['@app/*'],
     pathMappings: [{ pattern: '@app/*', targets: ['./src/*'] }],
     baseUrl: '',
+    verbatimModuleSyntax: false,
     trustworthy: true,
   };
 
@@ -267,6 +268,7 @@ describe('importFindings', () => {
     pathAliases: [],
     pathMappings: [],
     baseUrl: '',
+    verbatimModuleSyntax: false,
     trustworthy: true,
   };
 
@@ -320,6 +322,15 @@ describe('importFindings', () => {
     expect(typeOnly).toEqual([]);
     const asValue = importFindings(context('/nowhere', withTypes), new Map([['src/a.ts', refs(['express', 'bare'])]]));
     expect(asValue[0]).toMatchObject({ rule: 'unknown-dependency', symbol: 'express' });
+  });
+
+  it('ne prend un @types installé pour le paquet que si l’import ne sert qu’aux types', () => {
+    const root = makeRoot({ 'node_modules/@types/express/package.json': '{}', 'src/a.ts': '' });
+    const imports = new Map([['src/a.ts', refs(['express', 'bare'])]]);
+    expect(importFindings(context(root), imports)[0])
+      .toMatchObject({ rule: 'unknown-dependency', severity: 'critical' });
+    expect(importFindings({ ...context(root), isRuntimeImport: () => false }, imports)[0])
+      .toMatchObject({ rule: 'unlisted-dependency', severity: 'major' });
   });
 
   it('laisse passer dépendance déclarée, module natif et chemin absolu', () => {
@@ -386,6 +397,18 @@ describe('runtimeImports', () => {
       ].join('\n'),
     });
     expect([...runtimeImports(sources.get('src/a.ts') as SourceFile)]).toEqual(['fastify']);
+  });
+
+  it('avec verbatimModuleSyntax, n’efface que les imports marqués import type', () => {
+    const sources = makeProject({
+      'src/a.ts': [
+        "import type { A } from 'erased';",
+        "import { type B } from 'inline';",
+        "import { C } from 'typed';",
+        'export function f(a: A, b: B, c: C): void { void a; void b; void c; }',
+      ].join('\n'),
+    });
+    expect([...runtimeImports(sources.get('src/a.ts') as SourceFile, true)].sort()).toEqual(['inline', 'typed']);
   });
 });
 
