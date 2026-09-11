@@ -78,13 +78,12 @@ export function fileImports(sourceFile: SourceFile): ImportRef[] {
 }
 
 /**
- * Modules encore importés une fois les types effacés, d'après l'émission de TypeScript : un
- * import utilisé seulement en position de type disparaît, son paquet n'est pas chargé à
- * l'exécution. Transpilation d'un fichier seul, sans métadonnées de décorateurs.
+ * Sortie JavaScript du fichier, types effacés : un import utilisé seulement en position de type
+ * disparaît. Transpilation d'un fichier seul, sans métadonnées de décorateurs.
  * Avec `verbatimModuleSyntax` du projet, seul `import type` s'efface.
  */
-export function runtimeImports(sourceFile: SourceFile, verbatimModuleSyntax = false): Set<string> {
-  const { outputText } = ts.transpileModule(sourceFile.getFullText(), {
+function emitWithoutTypes(sourceFile: SourceFile, verbatimModuleSyntax: boolean): string {
+  return ts.transpileModule(sourceFile.getFullText(), {
     fileName: sourceFile.getBaseName(),
     compilerOptions: {
       module: ts.ModuleKind.ESNext,
@@ -93,8 +92,47 @@ export function runtimeImports(sourceFile: SourceFile, verbatimModuleSyntax = fa
       experimentalDecorators: true,
       verbatimModuleSyntax,
     },
-  });
+  }).outputText;
+}
+
+/** Modules encore importés une fois les types effacés : leur paquet est chargé à l'exécution. */
+export function runtimeImports(sourceFile: SourceFile, verbatimModuleSyntax = false): Set<string> {
+  const outputText = emitWithoutTypes(sourceFile, verbatimModuleSyntax);
   return new Set(ts.preProcessFile(outputText, true, true).importedFiles.map((ref) => ref.fileName));
+}
+
+/**
+ * Modules importés ou réexportés en tête de module une fois les types effacés. Un `import()`
+ * dynamique n'y figure pas, même vers un module aussi importé pour ses types.
+ */
+export function staticRuntimeImports(sourceFile: SourceFile, verbatimModuleSyntax = false): Set<string> {
+  const output = ts.createSourceFile(
+    sourceFile.getBaseName(),
+    emitWithoutTypes(sourceFile, verbatimModuleSyntax),
+    ts.ScriptTarget.ESNext,
+    false,
+    sourceFile.getExtension() === '.tsx' ? ts.ScriptKind.JSX : ts.ScriptKind.JS,
+  );
+  const kept = new Set<string>();
+  for (const statement of output.statements) {
+    if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) continue;
+    const specifier = statement.moduleSpecifier;
+    if (specifier !== undefined && ts.isStringLiteral(specifier)) kept.add(specifier.text);
+  }
+  return kept;
+}
+
+/** true si le nœud contient une fonction dotée d'un corps : de la logique, pas seulement des types. */
+function containsLogic(node: ts.Node): boolean {
+  if (ts.isFunctionLike(node) && (node as ts.FunctionLikeDeclaration).body !== undefined) return true;
+  return ts.forEachChild(node, containsLogic) ?? false;
+}
+
+/** Module de types : déclare au moins un type et aucune fonction. Ses importeurs partagent un contrat. */
+export function isTypesModule(sourceFile: SourceFile): boolean {
+  const root = sourceFile.compilerNode;
+  return root.statements.some((statement) => ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement))
+    && !containsLogic(root);
 }
 
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.d.ts', '.js', '.jsx', '.mjs', '.cjs'];
@@ -189,18 +227,24 @@ export function resolveImport(
 export interface ImportGraph {
   /** Fichier → fichiers du projet qu'il importe. */
   edges: Map<string, Set<string>>;
+  /** Modules de types, au sens de isTypesModule ; absent quand les sources n'ont pas été lues. */
+  typesModules?: ReadonlySet<string>;
 }
 
-/** Graphe des dépendances internes, arêtes limitées aux fichiers du scope. */
+/**
+ * Graphe des dépendances internes, arêtes limitées aux fichiers du scope. `keep` écarte des
+ * imports ; ils sont résolus contre tout le scope, pour que le même specifier vise le même fichier.
+ */
 export function buildImportGraph(
   imports: Map<string, ImportRef[]>,
   manifest?: Manifest,
+  keep: (file: string, ref: ImportRef) => boolean = () => true,
 ): ImportGraph {
   const knownFiles = new Set(imports.keys());
   const edges = new Map<string, Set<string>>();
   for (const [file, refs] of imports) {
     const targets = new Set<string>();
-    for (const ref of refs) {
+    for (const ref of refs.filter((candidate) => keep(file, candidate))) {
       const resolved = resolveImport(file, ref, knownFiles, manifest);
       if (resolved !== undefined && resolved !== file) targets.add(resolved);
     }
@@ -209,8 +253,19 @@ export function buildImportGraph(
   return { edges };
 }
 
-/** true si l'un des deux fichiers importe l'autre, directement. */
+/** true si `from` atteint `to` en un ou deux imports : directement, par un barrel ou un intermédiaire. */
+function reachesInTwo(graph: ImportGraph, from: string, to: string): boolean {
+  const targets = graph.edges.get(from) ?? new Set<string>();
+  return targets.has(to) || [...targets].some((middle) => graph.edges.get(middle)?.has(to) === true);
+}
+
+/**
+ * true si un lien d'imports explique que les deux fichiers changent ensemble : un chemin d'au
+ * plus deux imports, dans un sens ou dans l'autre, ou un module de types importé par les deux.
+ */
 export function areLinked(graph: ImportGraph, fileA: string, fileB: string): boolean {
-  return (graph.edges.get(fileA)?.has(fileB) ?? false)
-    || (graph.edges.get(fileB)?.has(fileA) ?? false);
+  if (reachesInTwo(graph, fileA, fileB) || reachesInTwo(graph, fileB, fileA)) return true;
+  const targetsB = graph.edges.get(fileB) ?? new Set<string>();
+  return [...(graph.edges.get(fileA) ?? [])]
+    .some((target) => targetsB.has(target) && graph.typesModules?.has(target) === true);
 }

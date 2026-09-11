@@ -72,7 +72,7 @@ function report(options: ReportOptions = {}): ScanReport {
       exclude: defaultScope().exclude,
       gitignore: options.gitignore ?? true,
       toolsScoped: true,
-      importRules: 2,
+      importRules: 3,
       rules: [],
       subprojects: [],
     },
@@ -446,6 +446,15 @@ describe('compareToBaseline', () => {
 
     const bothMeasured = compareToBaseline(makeBaseline(report({ aggregates: { 'orphans.count': 0 } })), noTools);
     expect(bothMeasured.passed).toBe(false);
+  });
+
+  it('ne compte pas en régression le couplage caché d’un historique devenu assez long', () => {
+    const pair = finding({ tool: 'churn', rule: 'hidden-coupling', file: 'src/a.ts', symbol: 'src/b.ts' });
+    const tooShort = makeBaseline(report());
+    const measured = report({ withCoupling: true, aggregates: { 'coupling.hidden.count': 1 }, findings: [pair] });
+    const result = compareToBaseline(tooShort, measured);
+    expect(result.passed).toBe(true);
+    expect(result.skippedKeys).toContain('churn|hidden-coupling|src/a.ts');
   });
 
   it('compte bien l’amélioration quand l’outil a tourné et ne trouve plus rien', () => {

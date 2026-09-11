@@ -179,7 +179,7 @@ export interface CoChange {
   commitsB: number;
   /** together / min(commitsA, commitsB) : part de co-modification du moins actif. */
   degree: number;
-  /** true si l'un importe l'autre : le couplage est alors explicite, donc assumé. */
+  /** true si deux imports au plus, ou un module de types commun, les relient : couplage explicite. */
   linked: boolean;
 }
 

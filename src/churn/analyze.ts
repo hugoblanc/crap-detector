@@ -14,7 +14,7 @@ import type {
   Hotspot,
 } from '../core/types.js';
 import type { GitCommit } from './git.js';
-import { readGitLog, windowStartDate } from './git.js';
+import { readGitLog, renameTracker, windowStartDate } from './git.js';
 
 interface MutableChurn {
   file: string;
@@ -25,23 +25,16 @@ interface MutableChurn {
   lastChange: string;
 }
 
-/**
- * Agrège les commits par fichier en suivant les renommages.
- * git rend les commits du plus récent au plus ancien : en mémorisant chaque
- * renommage rencontré, un chemin historique est ramené à son nom actuel.
- */
+/** Agrège les commits par fichier en suivant les renommages. */
 export function aggregateChurn(commits: GitCommit[], scope: ScopeConfig): FileChurn[] {
   const includePatterns = scope.include.map(globToRegExp);
   const excludePatterns = scope.exclude.map(globToRegExp);
-  const canonical = new Map<string, string>();
+  const currentPath = renameTracker();
   const byFile = new Map<string, MutableChurn>();
 
   for (const commit of commits) {
     for (const change of commit.files) {
-      const current = canonical.get(change.path) ?? change.path;
-      if (change.previousPath !== undefined && change.previousPath !== '') {
-        canonical.set(change.previousPath, current);
-      }
+      const current = currentPath(change);
       if (
         !matchesAnyGlob(includePatterns, current)
         || matchesAnyGlob(excludePatterns, current)

@@ -86,6 +86,7 @@ async function addChurn(report: ScanReport, fast: FastScan, config: ResolvedConf
   if (window !== undefined) report.churn.since = window;
   if (!log.available) return;
   const coupling = analyzeCoupling(rootPath, log.commits, config.scope, config.churn, fast.graph);
+  if (coupling === undefined) return;
   report.coupling = coupling;
   report.aggregates['coupling.hidden.count'] = coupling.summary.hiddenPairs;
   report.findings.push(...coupling.findings);
@@ -179,7 +180,7 @@ function reportScope(config: ResolvedConfig, ignored: GitIgnoredResult, subproje
     exclude: [...config.scope.exclude],
     gitignore: ignored.available,
     toolsScoped: true,
-    importRules: 2,
+    importRules: 3,
     rules: enabledOptionalRules(config.rules),
     subprojects,
   };

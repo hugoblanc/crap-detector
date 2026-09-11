@@ -174,15 +174,19 @@ describe('scanFull', () => {
     expect(report.thresholds.cyclomaticComplexity).toBe(10);
   });
 
-  it('ajoute churn et couplage sur un dépôt git', async () => {
-    const report = await scanFull(makeRoot(PROJECT, true), config, {
-      skipExternalTools: true,
-      now: new Date(),
-    });
+  it('ajoute churn et couplage sur un dépôt git, sauf si l’historique est trop court', async () => {
+    const root = makeRoot(PROJECT, true);
+    const options = { skipExternalTools: true, now: new Date() };
+    const report = await scanFull(root, resolveConfig({ churn: { minHistoryCommits: 1 } }), options);
     expect(report.churn?.available).toBe(true);
     expect(report.churn?.summary.commitsScanned).toBe(1);
     expect(report.coupling?.summary).toEqual({ pairs: 0, hiddenPairs: 0 });
     expect(report.aggregates['coupling.hidden.count']).toBe(0);
+
+    const tooShort = await scanFull(root, config, options);
+    expect(tooShort.coupling).toBeUndefined();
+    expect(tooShort.aggregates['coupling.hidden.count']).toBeUndefined();
+    expect(renderSummary(tooShort)).toContain('couplage non mesuré : 1 commits lus, historique trop court (churn.minHistoryCommits)');
   }, 60_000);
 
   it('joint historique et AST quand la racine est un sous-dossier du dépôt', async () => {
@@ -199,7 +203,7 @@ describe('scanFull', () => {
     }
     execFileSync('git', ['commit', '-qam', 'retouche'], { cwd: repo, stdio: 'ignore' });
 
-    const pairsFromTwoCommits = resolveConfig({ churn: { minCoChangeCommits: 2 } });
+    const pairsFromTwoCommits = resolveConfig({ churn: { minCoChangeCommits: 2, minHistoryCommits: 2 } });
     const report = await scanFull(join(repo, 'app'), pairsFromTwoCommits, {
       skipExternalTools: true,
       now: new Date(),

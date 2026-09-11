@@ -133,6 +133,10 @@ function unavailableNotes(report: ScanReport): string[] {
     ...unavailableNote('knip', report.deadCode),
     ...unavailableNote('jscpd', report.duplication),
   ];
+  if (report.churn?.available === true && report.coupling === undefined) {
+    notes.push(`couplage non mesuré : ${String(report.churn.summary.commitsScanned)} commits lus, `
+      + 'historique trop court (churn.minHistoryCommits)');
+  }
   const gitignoreReason = report.scope.gitignoreUnavailableReason;
   if (gitignoreReason !== undefined) {
     notes.push(`fichiers ignorés par git non exclus : ${gitignoreReason}`);

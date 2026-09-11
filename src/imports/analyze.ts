@@ -14,11 +14,14 @@ import type { ImportGraph, ImportRef } from './extract.js';
 import {
   buildImportGraph,
   fileImports,
+  isTypesModule,
   normalizeRelative,
   packageNameOf,
   resolveRelativeImport,
   runtimeImports,
+  staticRuntimeImports,
 } from './extract.js';
+import { runtimeGraph } from './graph.js';
 import { inDir, isDeclared, manifestResolver, readManifest, typesPackageOf } from './manifest.js';
 import type { Manifest } from './manifest.js';
 
@@ -146,7 +149,28 @@ function unresolvedFinding(rootPath: string, file: string, ref: ImportRef, known
 export interface ImportAnalysis {
   report: ImportsReport;
   graph: ImportGraph;
+  /** Imports présents à l'exécution seulement : ni types effacés, ni `import()` dynamique. */
+  cycleGraph: ImportGraph;
   imports: Map<string, ImportRef[]>;
+}
+
+/**
+ * Un import statique survit-il à l'émission, d'après le tsconfig le plus proche du fichier ?
+ * Un `import()` dynamique ne charge le module qu'à l'appel ; un `require` reste compté.
+ */
+function emittedStatically(
+  sourceFiles: Map<string, SourceFile>,
+  manifestFor: (file: string) => Manifest,
+): (file: string, ref: ImportRef) => boolean {
+  const kept = new Map<string, Set<string>>();
+  return (file, ref) => {
+    if (ref.kind === 'dynamic') return false;
+    const source = sourceFiles.get(file);
+    if (ref.kind === 'require' || source === undefined) return true;
+    const emitted = kept.get(file) ?? staticRuntimeImports(source, manifestFor(file).verbatimModuleSyntax);
+    kept.set(file, emitted);
+    return emitted.has(ref.specifier);
+  };
 }
 
 export function collectImports(sourceFiles: Map<string, SourceFile>): Map<string, ImportRef[]> {
@@ -200,7 +224,10 @@ export function analyzeImports(
   const context = dependencyContext(rootPath, sourceFiles);
   const imports = collectImports(sourceFiles);
   // Les alias du graphe restent ceux de la racine : pas de résolution par sous-projet.
-  const graph = buildImportGraph(imports, readManifest(rootPath));
+  const manifest = readManifest(rootPath);
+  const typesModules = new Set([...sourceFiles].filter(([, source]) => isTypesModule(source)).map(([file]) => file));
+  const graph: ImportGraph = { ...buildImportGraph(imports, manifest), typesModules };
+  const cycleGraph = runtimeGraph(graph, imports, manifest, emittedStatically(sourceFiles, context.manifestFor));
   const findings = importFindings(context, imports);
   const untrusted = [...imports.keys()].map(context.manifestFor).find((manifest) => !manifest.trustworthy);
   const report: ImportsReport = {
@@ -212,5 +239,5 @@ export function analyzeImports(
   if (untrusted?.untrustworthyReason !== undefined) {
     report.manifestReason = untrusted.untrustworthyReason;
   }
-  return { report, graph, imports };
+  return { report, graph, cycleGraph, imports };
 }

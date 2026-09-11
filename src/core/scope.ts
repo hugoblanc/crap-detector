@@ -16,9 +16,10 @@ export interface BaselineScope {
   /**
    * Règles d'imports en vigueur. 2 : paquet jugé contre le package.json le plus proche, critique
    * seulement s'il n'est installé nulle part ; orphelins comptés seulement sans knip, tests compris
-   * comme importeurs. Absent des baselines antérieures.
+   * comme importeurs. 3 : cycles sans imports effacés à l'émission ni `import()` ; couplage caché
+   * sans fichier supprimé, sans lien à deux imports près, sur un historique suffisant.
    */
-  importRules: 2;
+  importRules: 3;
   /** Règles optionnelles activées, triées ; absent des baselines antérieures, qui les comptaient toutes. */
   rules: string[];
   /**
@@ -69,8 +70,9 @@ export function scopeIncompatibility(
   if (withTools && scope.toolsScoped !== true) {
     return 'la baseline compte la duplication et le code mort hors du périmètre : refaire la baseline';
   }
-  if (scope.importRules !== 2) {
-    return 'la baseline compte orphelins et paquets non déclarés avec les règles antérieures : refaire la baseline';
+  if (scope.importRules !== 3) {
+    return 'la baseline compte cycles, couplage caché, orphelins et paquets non déclarés avec des règles antérieures : '
+      + 'refaire la baseline';
   }
   return gitignoreIncompatibility(scope, current) ?? rulesIncompatibility(scope, current)
     ?? knipIncompatibility(baseline, current, unusedFiles);

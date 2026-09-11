@@ -136,15 +136,16 @@ describe('resolveConfig — churn', () => {
   it('fournit la fenêtre et les garde-fous de couplage par défaut', () => {
     expect(resolveConfig({}).churn).toEqual({
       windowDays: 365,
-      maxFilesPerCommit: 50,
+      maxFilesPerCommit: 20,
       minCoChangeCommits: 5,
       minCoChangeDegree: 0.5,
+      minHistoryCommits: 50,
     });
   });
 
   it('ne remplace que les champs churn fournis', () => {
     const resolved = resolveConfig({ churn: { windowDays: 90 } });
     expect(resolved.churn.windowDays).toBe(90);
-    expect(resolved.churn.maxFilesPerCommit).toBe(50);
+    expect(resolved.churn.maxFilesPerCommit).toBe(20);
   });
 });

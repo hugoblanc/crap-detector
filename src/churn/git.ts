@@ -40,6 +40,21 @@ const FIELD_SEPARATOR = '\u001f';
 
 export const GIT_LOG_FORMAT = '%x01%H%x1f%aI';
 
+/**
+ * Ramène un chemin historique à son nom actuel. À appeler sur chaque fichier des commits, du plus
+ * récent au plus ancien comme git les rend : chaque renommage rencontré est mémorisé.
+ */
+export function renameTracker(): (change: GitFileChange) => string {
+  const canonical = new Map<string, string>();
+  return (change) => {
+    const current = canonical.get(change.path) ?? change.path;
+    if (change.previousPath !== undefined && change.previousPath !== '') {
+      canonical.set(change.previousPath, current);
+    }
+    return current;
+  };
+}
+
 /** Découpe la sortie brute de `git log --numstat -z` en commits. */
 export function parseGitLog(raw: string): GitCommit[] {
   const records = raw.split('\0');

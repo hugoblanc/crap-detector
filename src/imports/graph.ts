@@ -14,7 +14,9 @@
  */
 import { compareFindings, envelope, makeFinding } from '../core/findings.js';
 import type { DependencyReport, DependencySummary, Finding } from '../core/types.js';
-import type { ImportGraph } from './extract.js';
+import { buildImportGraph } from './extract.js';
+import type { ImportGraph, ImportRef } from './extract.js';
+import type { Manifest } from './manifest.js';
 
 export interface Cycle {
   /** Membres de la composante, triés : c'est aussi la clé stable du finding. */
@@ -127,6 +129,21 @@ export function findCycles(graph: ImportGraph): Cycle[] {
   }
   return cycles.sort((a, b) => b.files.length - a.files.length
     || (a.files[0] ?? '').localeCompare(b.files[0] ?? ''));
+}
+
+/**
+ * Graphe des imports présents à l'exécution, celui des cycles. `emitted` dit si un import survit
+ * à l'émission. Retirer des arêtes ne crée aucun cycle : seuls les fichiers déjà pris dans un
+ * cycle du graphe complet sont soumis à `emitted`, qui coûte une transpilation par fichier.
+ */
+export function runtimeGraph(
+  graph: ImportGraph,
+  imports: Map<string, ImportRef[]>,
+  manifest: Manifest,
+  emitted: (file: string, ref: ImportRef) => boolean,
+): ImportGraph {
+  const suspects = new Set(findCycles(graph).flatMap((cycle) => cycle.files));
+  return buildImportGraph(imports, manifest, (file, ref) => suspects.has(file) && emitted(file, ref));
 }
 
 /**

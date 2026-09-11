@@ -97,6 +97,9 @@ refactoring qui vaille : la complexité seule ne coûte rien si personne ne touc
 
 **Couplage caché.** Paires de fichiers qui changent toujours ensemble sans import entre eux.
 Aucun linter ni analyse statique ne voit ça, seulement l'historique.
+Une paire n'est pas cachée si deux imports au plus la relient (barrel, intermédiaire), ou si les deux fichiers importent un même module de types : au moins un type déclaré, aucune fonction.
+Les fichiers supprimés depuis sont ignorés, les renommés suivis, et les commits de plus de 20 fichiers écartés.
+Sous 50 commits dans la fenêtre, le couplage n'est pas mesuré : les fichiers centraux d'un projet jeune changent ensemble par construction.
 
 **Supply chain.** Chaque import de paquet est jugé contre le `package.json` le plus proche du fichier, pas seulement celui de la racine.
 Un paquet non déclaré et introuvable dans tous les `node_modules` en remontant depuis le fichier sort en `unknown-dependency`, critique : c'est la signature du slopsquatting, quand un agent invente une dépendance plausible.
@@ -106,6 +109,8 @@ Quand knip a tourné, ses `unlisted-dependency` sur les fichiers que cette règl
 
 **Cycles et orphelins**, calculés sur le graphe d'imports interne (composantes fortement
 connexes, Tarjan itératif).
+Un cycle ne compte que s'il existe à l'exécution : les imports effacés à l'émission (`import type`, symboles utilisés seulement comme types, selon `verbatimModuleSyntax` du tsconfig le plus proche) et les `import()` dynamiques n'en créent pas.
+Les métadonnées de décorateurs (`emitDecoratorMetadata`) ne sont pas prises en compte.
 Les orphelins ne sont comptés que si knip n'a pas tourné (`--no-tools`, ou knip absent) : `unused-file` couvre le même besoin, et knip connaît les points d'entrée par convention, comme les pages Next.js, que le graphe ne voit pas.
 Les tests restent hors mesure mais comptent alors comme importeurs : un module utilisé seulement par ses tests n'est pas orphelin.
 
@@ -276,9 +281,10 @@ Cinq règles la gardent honnête :
   },
   "churn": {
     "windowDays": 365,
-    "maxFilesPerCommit": 50,
+    "maxFilesPerCommit": 20,
     "minCoChangeCommits": 5,
-    "minCoChangeDegree": 0.5
+    "minCoChangeDegree": 0.5,
+    "minHistoryCommits": 50
   },
   "knip": {
     "maxUnusedFileFraction": 0.33,

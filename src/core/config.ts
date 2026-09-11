@@ -69,14 +69,20 @@ export interface ChurnConfig {
   /** Fenêtre d'historique analysée, en jours. */
   windowDays: number;
   /**
-   * Commits touchant plus de fichiers que ça : ignorés pour le couplage temporel.
-   * Un commit de 500 fichiers produirait 125 000 paires et ne dit rien de la conception.
+   * Commits touchant plus de fichiers que ça : ignorés pour le couplage temporel. Mesuré sur trois
+   * dépôts, 90 % des commits touchent au plus 10 à 17 fichiers : au-delà de 20, c'est une refonte
+   * transverse, qui relie tout à tout sans rien dire de la conception.
    */
   maxFilesPerCommit: number;
   /** Nombre minimum de co-modifications avant de considérer une paire. */
   minCoChangeCommits: number;
   /** Part minimale de co-modification (together / min(commitsA, commitsB)). */
   minCoChangeDegree: number;
+  /**
+   * Commits minimum dans la fenêtre pour mesurer le couplage. Sous 50, les 5 co-modifications
+   * exigées pèsent plus de 10 % de l'historique : un projet jeune change ses fichiers centraux ensemble.
+   */
+  minHistoryCommits: number;
 }
 
 /** Fiabilité du rapport knip (adapters/knip-reliability.ts). */
@@ -125,9 +131,10 @@ const DEFAULT_REPORT_THRESHOLDS: ReportThresholds = {
 
 const DEFAULT_CHURN: ChurnConfig = {
   windowDays: 365,
-  maxFilesPerCommit: 50,
+  maxFilesPerCommit: 20,
   minCoChangeCommits: 5,
   minCoChangeDegree: 0.5,
+  minHistoryCommits: 50,
 };
 
 /** Plus d'un tiers des fichiers signalés inutilisés, et au moins 10 : voir KnipConfig. */

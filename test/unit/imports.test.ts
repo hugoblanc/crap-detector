@@ -9,11 +9,13 @@ import {
   buildImportGraph,
   classifySpecifier,
   fileImports,
+  isTypesModule,
   normalizeRelative,
   packageNameOf,
   resolveRelativeImport,
   runtimeImports,
 } from '../../src/imports/extract.js';
+import { findCycles } from '../../src/imports/graph.js';
 import type { ImportRef } from '../../src/imports/extract.js';
 import {
   isDeclared,
@@ -160,11 +162,60 @@ describe('buildImportGraph', () => {
     expect([...(graph.edges.get('src/c.ts') ?? [])]).toEqual([]);
   });
 
-  it('areLinked est vrai dans les deux sens et faux sur une paire sans arête', () => {
-    const graph = buildImportGraph(imports);
+  it('areLinked est vrai dans les deux sens, jusqu’à deux imports, et faux au-delà', () => {
+    const graph = buildImportGraph(new Map([
+      ...imports,
+      ['src/c.ts', [{ specifier: './d.js', kind: 'import', specifierKind: 'relative', line: 1 }]],
+      ['src/d.ts', []],
+    ]));
     expect(areLinked(graph, 'src/a.ts', 'src/b.ts')).toBe(true);
     expect(areLinked(graph, 'src/b.ts', 'src/a.ts')).toBe(true);
-    expect(areLinked(graph, 'src/a.ts', 'src/c.ts')).toBe(false);
+    expect(areLinked(graph, 'src/c.ts', 'src/a.ts')).toBe(true);
+    expect(areLinked(graph, 'src/a.ts', 'src/d.ts')).toBe(false);
+  });
+});
+
+describe('isTypesModule', () => {
+  it('retient un fichier de types et de constantes, pas un fichier qui contient une fonction', () => {
+    const sources = makeProject({
+      'src/types.ts': 'export interface A { run(): void }\nexport type B = A[];\nexport const KEYS = [\'a\'] as const;\n',
+      'src/logic.ts': 'export interface A { value: number }\nexport const make = (): A => ({ value: 1 });\n',
+      'src/barrel.ts': "export * from './types.js';\n",
+    });
+    expect([...sources].filter(([, source]) => isTypesModule(source)).map(([file]) => file)).toEqual(['src/types.ts']);
+  });
+});
+
+describe('cycles à l’exécution', () => {
+  function cyclesOf(files: Record<string, string>, tsconfig: object = {}): string[][] {
+    const root = makeRoot({ 'package.json': '{}', 'tsconfig.json': JSON.stringify(tsconfig) });
+    return findCycles(analyzeImports(root, makeProject(files)).cycleGraph).map((cycle) => cycle.files);
+  }
+
+  it('ignore un cycle qui ne passe que par des imports de types', () => {
+    expect(cyclesOf({
+      'src/a.ts': "import type { B } from './b.js';\nimport { helper } from './c.js';\nexport const a = (b: B): number => helper(b.size);\n",
+      'src/b.ts': "import { a } from './a.js';\nexport interface B { size: number }\nexport const b = a;\n",
+      'src/c.ts': "import { B } from './b.js';\nexport const helper = (size: number): number => size;\nexport type C = B;\n",
+    })).toEqual([]);
+  });
+
+  it('garde un cycle réel, et ignore un import() dynamique', () => {
+    expect(cyclesOf({
+      'src/a.ts': "import { b } from './b.js';\nexport const a = (): number => b + 1;\n",
+      'src/b.ts': "import { a } from './a.js';\nexport const b = 1;\nexport const loop = a;\n",
+      'src/c.ts': "import { lazy } from './d.js';\nexport const c = lazy;\n",
+      'src/d.ts': "export const lazy = async (): Promise<unknown> => import('./c.js');\n",
+    })).toEqual([['src/a.ts', 'src/b.ts']]);
+  });
+
+  it('avec verbatimModuleSyntax, compte un import { type X } qui survit à l’émission', () => {
+    const files = {
+      'src/a.ts': "import { type B } from './b.js';\nexport const a = (b: B): B => b;\n",
+      'src/b.ts': "import { a } from './a.js';\nexport interface B { size: number }\nexport const b = a;\n",
+    };
+    expect(cyclesOf(files)).toEqual([]);
+    expect(cyclesOf(files, { compilerOptions: { verbatimModuleSyntax: true } })).toEqual([['src/a.ts', 'src/b.ts']]);
   });
 });
 

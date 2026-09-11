@@ -78,7 +78,7 @@ export function scanFast(rootPath: string, config: ResolvedConfig, ignored?: Ign
   const slopAnalysis = analyzeSlop(rootPath, sourceFiles, config.rules);
   const slop = slopAnalysis.report;
   const importAnalysis = analyzeImports(rootPath, sourceFiles);
-  const dependencies = analyzeGraph(rootPath, importAnalysis.graph);
+  const dependencies = analyzeGraph(rootPath, importAnalysis.cycleGraph);
 
   const aggregates: Aggregates = {
     'erosion.fraction': summary.erosionFraction,
