@@ -95,6 +95,10 @@ describe('findOrphans', () => {
   it('ne considère pas un point d’entrée comme orphelin', () => {
     expect(findOrphans(graph({ 'cli.ts': ['core.ts'], 'core.ts': [] }))).toEqual([]);
   });
+
+  it('compte les importeurs hors mesure, comme les tests', () => {
+    expect(findOrphans(graph({ 'tested.ts': [], 'orphan.ts': [] }), new Set(['tested.ts']))).toEqual(['orphan.ts']);
+  });
 });
 
 describe('graphFindings', () => {
@@ -123,7 +127,7 @@ describe('graphFindings', () => {
 });
 
 describe('analyzeGraph', () => {
-  it('assemble résumé, cycles, orphelins et findings', () => {
+  it('assemble résumé, cycles et findings, sans orphelins : ils dépendent de knip', () => {
     const report = analyzeGraph(
       '/repo',
       graph({
@@ -132,10 +136,10 @@ describe('analyzeGraph', () => {
         'orphan.ts': [],
       }),
     );
-    expect(report.summary).toEqual({ cycles: 1, orphans: 1, largestCycle: 2 });
+    expect(report.summary).toEqual({ cycles: 1, orphans: 0, largestCycle: 2 });
     expect(report.cycles).toEqual([{ files: ['a.ts', 'b.ts'] }]);
-    expect(report.orphans).toEqual(['orphan.ts']);
-    expect(report.findings).toHaveLength(2);
+    expect(report.orphans).toEqual([]);
+    expect(report.findings).toHaveLength(1);
   });
 
   it('rend un résumé nul sur un graphe sain', () => {

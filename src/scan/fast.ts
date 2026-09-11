@@ -1,7 +1,8 @@
 /**
  * Chemin rapide : tout ce qui se calcule sur l'AST seul.
- * Ni git, ni sous-processus, ni lecture de node_modules — c'est ce qui permet au
+ * Ni git, ni sous-processus, ni parcours de node_modules — c'est ce qui permet au
  * hook PostToolUse de tourner après chaque édition d'un agent sans le ralentir.
+ * Seul un paquet non déclaré y est cherché, par son chemin.
  *
  * Ce module ne doit jamais importer src/adapters ni src/churn, même pour un type
  * seul : un `import` statique de l'adaptateur suffirait à charger knip au démarrage.
@@ -10,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Project } from 'ts-morph';
 import type { SourceFile } from 'ts-morph';
-import { compareFindings, envelope, makeFinding } from '../core/findings.js';
+import { compareFindings, envelope } from '../core/findings.js';
 import type { ResolvedConfig } from '../core/config.js';
 import type {
   Aggregates,
@@ -24,11 +25,10 @@ import type {
   SlopReport,
 } from '../core/types.js';
 import { analyzeFile, collectFiles, findingsForFiles, summarizeFiles } from '../metrics/analyze.js';
-import { analyzeImports } from '../imports/analyze.js';
+import { analyzeImports, dependencyContext, dependencyFinding } from '../imports/analyze.js';
 import { analyzeGraph } from '../imports/graph.js';
 import type { ImportGraph } from '../imports/extract.js';
-import { fileImports, packageNameOf } from '../imports/extract.js';
-import { isDeclared, readManifest } from '../imports/manifest.js';
+import { fileImports } from '../imports/extract.js';
 import { analyzeSlop, slopFindings } from '../slop/analyze.js';
 import { slopHits } from '../slop/rules.js';
 import type { SlopHit } from '../slop/rules.js';
@@ -88,7 +88,6 @@ export function scanFast(rootPath: string, config: ResolvedConfig, ignored?: Ign
     'typesafety.escapes.count': slop.summary.typeEscapes,
     'imports.unknown.count': importAnalysis.report.summary.unknownDependencies,
     'cycles.count': dependencies.summary.cycles,
-    'orphans.count': dependencies.summary.orphans,
   };
 
   const findings = [
@@ -116,7 +115,7 @@ export function scanFast(rootPath: string, config: ResolvedConfig, ignored?: Ign
  * Analyse d'un seul fichier, pour le hook d'agent.
  * Le graphe d'imports n'a pas de sens sur un fichier isolé, donc ni cycle ni
  * orphelin ici ; seul le paquet non déclaré reste vérifiable, le package.json
- * étant une seule lecture.
+ * le plus proche étant une seule lecture.
  */
 export function scanFile(
   rootPath: string,
@@ -133,25 +132,10 @@ export function scanFile(
     ...slopFindings(slopHits(sourceFile, relativePath)),
   ];
 
-  const manifest = readManifest(rootPath);
-  if (manifest.trustworthy) {
-    for (const ref of fileImports(sourceFile)) {
-      if (ref.specifierKind !== 'bare' && ref.specifierKind !== 'subpath') continue;
-      const packageName = packageNameOf(ref.specifier);
-      if (isDeclared(manifest, ref.specifier, packageName)) continue;
-      findings.push(
-        makeFinding({
-          tool: 'imports',
-          rule: 'unknown-dependency',
-          file: relativePath,
-          line: ref.line,
-          symbol: packageName,
-          symbolKey: packageName,
-          severity: 'critical',
-          message: `paquet '${packageName}' importé mais absent du package.json`,
-        }),
-      );
-    }
+  const context = dependencyContext(rootPath, new Map([[relativePath, sourceFile]]));
+  for (const ref of fileImports(sourceFile)) {
+    const finding = dependencyFinding(context, relativePath, ref);
+    if (finding !== undefined) findings.push(finding);
   }
 
   return {

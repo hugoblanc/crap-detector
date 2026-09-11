@@ -137,9 +137,12 @@ export function findCycles(graph: ImportGraph): Cycle[] {
  */
 const ORPHAN_EXEMPT = /(?:^|\/)(?:\.[^/]+|[^/]+\.config)\.[cm]?tsx?$/;
 
-/** Fichier sans aucun import entrant ni sortant : plus relié à rien. */
-export function findOrphans(graph: ImportGraph): string[] {
-  const incoming = new Set<string>();
+/**
+ * Fichier sans aucun import entrant ni sortant : plus relié à rien. `importedElsewhere` :
+ * fichiers du graphe importés depuis des fichiers hors mesure, comme les tests.
+ */
+export function findOrphans(graph: ImportGraph, importedElsewhere: ReadonlySet<string> = new Set()): string[] {
+  const incoming = new Set<string>(importedElsewhere);
   for (const targets of graph.edges.values()) {
     for (const target of targets) incoming.add(target);
   }
@@ -190,14 +193,14 @@ export function summarizeGraph(cycles: Cycle[], orphans: string[]): DependencySu
   };
 }
 
+/** Cycles seulement : les orphelins dépendent de knip, ils sont ajoutés par scan/orphans.ts. */
 export function analyzeGraph(rootPath: string, graph: ImportGraph): DependencyReport {
   const cycles = findCycles(graph);
-  const orphans = findOrphans(graph);
   return {
     ...envelope(rootPath, 'ts-morph'),
-    summary: summarizeGraph(cycles, orphans),
+    summary: summarizeGraph(cycles, []),
     cycles,
-    orphans,
-    findings: graphFindings(cycles, orphans),
+    orphans: [],
+    findings: graphFindings(cycles, []),
   };
 }

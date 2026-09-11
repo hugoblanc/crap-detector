@@ -3,8 +3,9 @@
 > **Statut : expérimental (v0.1).**
 > Le chemin rapide `crap-detector file`, celui du hook, tourne en environ 200 ms sur un fichier.
 > Le scan complet tourne en 5 à 10 secondes et sous 600 Mo sur des dépôts de 700 à 800 fichiers.
-> Il reste des faux positifs sur les fichiers chargés par convention (migrations, tests e2e,
-> scripts) : voir les [issues ouvertes](https://github.com/hugoblanc/crap-detector/issues).
+> Les fichiers chargés par convention (migrations, tests e2e, scripts) sortent en `unused-file`
+> tant que le dépôt n'a pas de `knip.json` qui les déclare : voir [Code mort](#ce-qui-est-mesuré)
+> et les [issues ouvertes](https://github.com/hugoblanc/crap-detector/issues).
 > À utiliser en local, à titre indicatif, pas encore comme gate de CI.
 
 Détection déterministe de la dégradation d'une base de code TypeScript.
@@ -60,7 +61,8 @@ Codes de sortie : `0` propre, `1` gate en échec, `2` violation sur le fichier a
 
 C'est la contrainte qui structure tout le code.
 
-- **`file`** ne fait que de l'AST : ni git, ni sous-processus, ni lecture de `node_modules`.
+- **`file`** ne fait que de l'AST : ni git, ni sous-processus, ni parcours de `node_modules`,
+  où seul un paquet non déclaré est cherché par son chemin.
   Environ 200 ms de bout en bout, dont l'essentiel est le démarrage de Node.
   C'est ce qui le rend utilisable depuis un hook déclenché à chaque édition.
 - **`scan`, `check`, `baseline`** ajoutent git, `knip` et `jscpd`, chargés par
@@ -94,17 +96,35 @@ refactoring qui vaille : la complexité seule ne coûte rien si personne ne touc
 **Couplage caché.** Paires de fichiers qui changent toujours ensemble sans import entre eux.
 Aucun linter ni analyse statique ne voit ça, seulement l'historique.
 
-**Supply chain.** Import d'un paquet absent du `package.json` — la signature du
-slopsquatting, quand un agent invente une dépendance plausible.
+**Supply chain.** Chaque import de paquet est jugé contre le `package.json` le plus proche du fichier, pas seulement celui de la racine.
+Un paquet non déclaré et introuvable dans tous les `node_modules` en remontant depuis le fichier sort en `unknown-dependency`, critique : c'est la signature du slopsquatting, quand un agent invente une dépendance plausible.
+Un paquet non déclaré mais installé, arrivé par une dépendance transitive comme `express` via `@nestjs/platform-express`, sort en `unlisted-dependency`, majeur.
+Un import utilisé seulement comme type ne sort pas si son `@types/` est déclaré : TypeScript l'efface, rien n'est chargé à l'exécution.
+Quand knip a tourné, ses `unlisted-dependency` sur les fichiers que cette règle a pu juger sont écartés : un seul finding par cause.
 
 **Cycles et orphelins**, calculés sur le graphe d'imports interne (composantes fortement
 connexes, Tarjan itératif).
+Les orphelins ne sont comptés que si knip n'a pas tourné (`--no-tools`, ou knip absent) : `unused-file` couvre le même besoin, et knip connaît les points d'entrée par convention, comme les pages Next.js, que le graphe ne voit pas.
+Les tests restent hors mesure mais comptent alors comme importeurs : un module utilisé seulement par ses tests n'est pas orphelin.
 
 **Code mort et duplication**, via `knip` et `jscpd`, sur le même périmètre que l'analyse AST.
 `jscpd` ne reçoit que les fichiers du périmètre, et garde la config du dépôt (`.jscpd.json` ou clé `jscpd` du `package.json`), sauf `exitCode` et `threshold`.
 `knip` lit tout le projet, pour que les tests, les points d'entrée et les conventions de framework comptent comme importeurs.
 Seuls ses findings sur les fichiers du périmètre sont gardés, avec les dépendances du `package.json` qui les gouverne.
 Le résumé dit combien de findings ont été écartés comme hors périmètre.
+
+`unused-file` et `unused-export` ne valent que ce que knip sait des points d'entrée.
+Sans `knip.json`, il ne connaît que ceux du `package.json` et de ses plugins : tout fichier chargé autrement paraît mort.
+Avant d'utiliser ces règles comme gate, déclarer dans un `knip.json` (champs `entry` et `project`) les points d'entrée invisibles :
+
+- scripts lancés par leur chemin, depuis un shell ou une CI ; un script importé seulement par un autre script sort aussi tant que le premier n'est pas déclaré ;
+- migrations et seeds chargées par glob, comme celles de TypeORM ;
+- fichiers désignés dans une config, par exemple un setup Vitest passé par `path.resolve` ;
+- configs de test passées en argument, comme `jest --config test/jest-e2e.json`, que knip ne lit pas : ses specs e2e sortent sinon en `unused-file` ;
+- fichiers chargés par la plateforme de déploiement, comme un `middleware.ts` Vercel dans une app Vite.
+
+**Monorepo.** knip lancé depuis la racine d'un dépôt dont les workspaces ne sont pas déclarés juge tout contre la racine : sur un monorepo pnpm sans `packages` dans `pnpm-workspace.yaml`, il a signalé comme inutilisés des centaines de fichiers d'un sous-projet Vite, contre quelques-uns lancé depuis le dossier du sous-projet.
+Quand des sous-dossiers du périmètre ont leur propre `package.json`, le résumé les liste : scanner chacun séparément avec `--root <dossier>`.
 
 **Contre-mesures au gaming.** `functionsPerFile` et `medianFunctionSloc` : un agent qui
 saucissonne pour passer sous un seuil fait monter le premier et chuter le second.
@@ -143,11 +163,13 @@ Cinq règles la gardent honnête :
   indisponible passerait pour une amélioration, et son retour pour une régression.
 - Les clés de dette portent leur outil, donc `check --no-tools` ignore les entrées de
   `knip` au lieu de les compter comme corrigées.
+  Les orphelins, mesurés seulement sans knip, ne sont comparés que si les deux scans les ont mesurés.
 - Un changement de seuil, de périmètre ou de version d'outil rend la baseline
   incomparable : le gate échoue en demandant un nouveau snapshot, parce que ces chiffres
   ne sont réellement pas comparables. Le périmètre inclut le filtrage git : une baseline
   écrite sans lui (hors dépôt, ou avant qu'il existe) ne se compare pas à un scan qui l'applique.
   Il inclut aussi la restriction de `knip` et `jscpd` au périmètre : une baseline écrite quand ils comptaient hors périmètre ne se compare pas non plus.
+  De même pour une baseline écrite avant les règles d'imports actuelles (`importRules`) : ses faux positifs de dépendances laisseraient de la marge à un vrai paquet inventé.
 
 ## Configuration
 
@@ -214,6 +236,8 @@ Si les deux sont utilisés, garder un seul jeu de seuils comme source de vérit�
   pas les alias de bundler (Vite, webpack) ni les workspaces de monorepo : sur ces
   dépôts, des arêtes manquent, donc des cycles et des couplages explicites peuvent
   être ratés.
+- Un module virtuel fourni par un bundler ou un framework, comme `@theme/Layout` chez Docusaurus,
+  n'est ni déclaré ni installé : il sort en `unknown-dependency` critique.
 - Il n'y a pas de règles de frontières entre couches (`boundaries`). C'est le jour où
   il en faudra que `dependency-cruiser` redeviendra le bon outil.
 - La détection de commentaires redondants est absente : aucune formulation déterministe

@@ -11,7 +11,8 @@
  * dire non mesurée, jamais zéro.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
-import { scopeIncompatibility } from '../core/scope.js';
+import { baselineScope, scopeIncompatibility } from '../core/scope.js';
+import { comparableDebt } from './measured.js';
 import { appVersion } from '../core/version.js';
 import { AGGREGATE_KEYS } from '../core/types.js';
 import type {
@@ -142,12 +143,7 @@ export function makeBaseline(report: ScanReport): Baseline {
     toolVersions: toolVersionsOf(report),
     createdAt: report.generatedAt,
     thresholds: { ...report.thresholds },
-    scope: {
-      include: [...report.scope.include],
-      exclude: [...report.scope.exclude],
-      gitignore: report.scope.gitignore,
-      toolsScoped: report.scope.toolsScoped,
-    },
+    scope: baselineScope(report.scope),
     aggregates: roundAggregates(report.aggregates),
     debtCounts: debt.counts,
     debtMaxima: debt.maxima,
@@ -369,7 +365,8 @@ export function compareToBaseline(baseline: Baseline, report: ScanReport): Compa
   const current = summarizeDebt(report.findings);
   const tools = activeTools(report);
   const known = filesWithDebt(baseline);
-  const counts = debtComparison(baseline.debtCounts, current.counts, known, tools, 'count');
+  const debt = comparableDebt(baseline.debtCounts, current.counts, [baseline.aggregates, report.aggregates]);
+  const counts = debtComparison(debt.before, debt.after, known, tools, 'count');
   const maxima = debtComparison(baseline.debtMaxima, current.maxima, known, tools, 'max');
   const regressions = [...aggregate.regressions, ...counts.regressions, ...maxima.regressions];
   return {
@@ -378,7 +375,7 @@ export function compareToBaseline(baseline: Baseline, report: ScanReport): Compa
     regressions,
     improvements: [...aggregate.improvements, ...counts.improvements, ...maxima.improvements],
     unchangedCount: aggregate.unchanged + counts.unchanged + maxima.unchanged,
-    skippedKeys: [...aggregate.skipped, ...counts.skipped, ...maxima.skipped],
+    skippedKeys: [...aggregate.skipped, ...debt.skipped, ...counts.skipped, ...maxima.skipped],
     notes: aggregate.notes,
   };
 }

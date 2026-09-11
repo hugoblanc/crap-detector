@@ -59,14 +59,32 @@ export function renderSummary(report: ScanReport): string[] {
     `code mort   ${count(aggregates['deadcode.exports.count'])} exports, `
       + `${count(aggregates['deadcode.files.count'])} fichiers`,
     ...outOfScopeLine(report),
-    `graphe      ${count(aggregates['cycles.count'])} cycles, `
-      + `${count(aggregates['orphans.count'])} orphelins`,
+    `graphe      ${count(aggregates['cycles.count'])} cycles, ${orphanCount(aggregates['orphans.count'])}`,
     `typage      ${count(aggregates['typesafety.escapes.count'])} échappements`,
-    `imports     ${count(aggregates['imports.unknown.count'])} paquets non déclarés`,
+    `imports     ${count(aggregates['imports.unknown.count'])} paquets introuvables, `
+      + `${String(report.findings.filter((finding) => finding.rule === 'unlisted-dependency').length)} `
+      + 'installés mais non déclarés',
     `couplage    ${count(aggregates['coupling.hidden.count'])} paires couplées sans import`,
   ];
-  for (const note of unavailableNotes(report)) lines.push(note);
+  for (const note of [...unavailableNotes(report), ...subprojectNote(report)]) lines.push(note);
   return lines;
+}
+
+/** Sans compte d'orphelins, knip a tourné : ses fichiers inutilisés en tiennent lieu. */
+function orphanCount(value: number | undefined): string {
+  return value === undefined ? 'orphelins couverts par knip (fichiers inutilisés)' : `${String(value)} orphelins`;
+}
+
+/** Depuis la racine, knip et le graphe lisent mal un sous-projet qui a ses propres dépendances. */
+function subprojectNote(report: ScanReport): string[] {
+  const { subprojects } = report.scope;
+  if (subprojects.length === 0) return [];
+  const shown = subprojects.slice(0, 5).join(', ');
+  const more = subprojects.length > 5 ? ` et ${String(subprojects.length - 5)} autres` : '';
+  return [
+    `sous-projets ${shown}${more} ont leur propre package.json : `
+      + 'scanner chacun avec --root <dossier> pour des résultats fiables',
+  ];
 }
 
 /** Ce que les outils externes ont trouvé hors du périmètre, pour ceux qui ont tourné. */

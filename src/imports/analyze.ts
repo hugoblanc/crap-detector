@@ -2,13 +2,14 @@
  * Gate anti-hallucination supply-chain.
  * Un agent qui invente un paquet (« slopsquatting ») écrit un import parfaitement
  * plausible vers un paquet qui n'existe pas, ou pas dans ce projet. C'est
- * déterministe à vérifier : l'AST donne le specifier, le package.json la vérité.
+ * déterministe à vérifier : l'AST donne le specifier, le package.json la vérité,
+ * node_modules dit si le paquet existe au moins.
  */
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { SourceFile } from 'ts-morph';
 import { compareFindings, envelope, makeFinding } from '../core/findings.js';
-import type { Finding, ImportsReport, ImportsSummary } from '../core/types.js';
+import type { Finding, ImportsReport, ImportsSummary, Severity } from '../core/types.js';
 import type { ImportGraph, ImportRef } from './extract.js';
 import {
   buildImportGraph,
@@ -16,8 +17,9 @@ import {
   normalizeRelative,
   packageNameOf,
   resolveRelativeImport,
+  runtimeImports,
 } from './extract.js';
-import { isDeclared, readManifest } from './manifest.js';
+import { inDir, isDeclared, manifestResolver, readManifest, typesPackageOf } from './manifest.js';
 import type { Manifest } from './manifest.js';
 
 /** Extensions essayées quand un import relatif ne pointe pas sur un fichier du scope. */
@@ -37,6 +39,104 @@ function existsOnDisk(rootPath: string, fromFile: string, specifier: string): bo
     ON_DISK_EXTENSIONS.some((extension) => existsSync(join(rootPath, `${base}${extension}`))));
 }
 
+/** Résolvable comme Node le chercherait : node_modules de chaque dossier parent, jusqu'à la racine du disque. */
+function isInstalled(rootPath: string, file: string, packageName: string): boolean {
+  const candidates = [packageName, typesPackageOf(packageName)];
+  let dir = dirname(join(rootPath, file));
+  for (;;) {
+    const modules = join(dir, 'node_modules');
+    if (candidates.some((candidate) => existsSync(join(modules, candidate)))) return true;
+    const parent = dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+}
+
+/** Ce qu'il faut pour juger un import de paquet, calculé à la demande et mémorisé. */
+export interface DependencyContext {
+  rootPath: string;
+  manifestFor: (file: string) => Manifest;
+  /** false si l'import disparaît une fois les types effacés ; coûte une transpilation par fichier. */
+  isRuntimeImport: (file: string, specifier: string) => boolean;
+}
+
+export function dependencyContext(rootPath: string, sourceFiles: Map<string, SourceFile>): DependencyContext {
+  const runtime = new Map<string, Set<string>>();
+  return {
+    rootPath,
+    manifestFor: manifestResolver(rootPath),
+    isRuntimeImport: (file, specifier) => {
+      const source = sourceFiles.get(file);
+      if (source === undefined) return true;
+      const kept = runtime.get(file) ?? runtimeImports(source);
+      runtime.set(file, kept);
+      return kept.has(specifier);
+    },
+  };
+}
+
+interface UndeclaredKind {
+  rule: string;
+  severity: Severity;
+  message: (packageName: string, manifestPath: string) => string;
+}
+
+/** Un paquet installé arrive par une dépendance transitive ; introuvable, il est probablement inventé. */
+const UNDECLARED: Record<'installed' | 'missing', UndeclaredKind> = {
+  installed: {
+    rule: 'unlisted-dependency',
+    severity: 'major',
+    message: (name, path) => `paquet '${name}' installé mais absent de ${path}`,
+  },
+  missing: {
+    rule: 'unknown-dependency',
+    severity: 'critical',
+    message: (name, path) => `paquet '${name}' absent de ${path} et introuvable dans node_modules`,
+  },
+};
+
+/**
+ * Import de paquet non déclaré dans le package.json le plus proche du fichier. Un import de
+ * types seuls couvert par un `@types/` déclaré ne charge rien à l'exécution : pas de finding.
+ */
+export function dependencyFinding(context: DependencyContext, file: string, ref: ImportRef): Finding | undefined {
+  if (ref.specifierKind !== 'bare' && ref.specifierKind !== 'subpath') return undefined;
+  const manifest = context.manifestFor(file);
+  // Sans manifeste fiable, la règle se tait plutôt que de produire du bruit.
+  if (!manifest.trustworthy) return undefined;
+  const packageName = packageNameOf(ref.specifier);
+  if (isDeclared(manifest, ref.specifier, packageName)) return undefined;
+  const typesDeclared = manifest.dependencies.has(typesPackageOf(packageName));
+  if (typesDeclared && !context.isRuntimeImport(file, ref.specifier)) return undefined;
+  const installed = ref.specifierKind === 'bare' && isInstalled(context.rootPath, file, packageName);
+  const kind = UNDECLARED[installed ? 'installed' : 'missing'];
+  return makeFinding({
+    tool: 'imports',
+    rule: kind.rule,
+    file,
+    line: ref.line,
+    symbol: packageName,
+    symbolKey: packageName,
+    severity: kind.severity,
+    message: kind.message(packageName, inDir(manifest.dir, 'package.json')),
+  });
+}
+
+function unresolvedFinding(rootPath: string, file: string, ref: ImportRef, knownFiles: ReadonlySet<string>): Finding | undefined {
+  if (resolveRelativeImport(file, ref.specifier, knownFiles) !== undefined) return undefined;
+  if (existsOnDisk(rootPath, file, ref.specifier)) return undefined;
+  return makeFinding({
+    tool: 'imports',
+    rule: 'unresolved-import',
+    file,
+    line: ref.line,
+    symbol: ref.specifier,
+    symbolKey: ref.specifier,
+    severity: 'critical',
+    message: `import vers '${ref.specifier}' : aucun fichier correspondant`,
+  });
+}
+
 export interface ImportAnalysis {
   report: ImportsReport;
   graph: ImportGraph;
@@ -51,50 +151,15 @@ export function collectImports(sourceFiles: Map<string, SourceFile>): Map<string
   return imports;
 }
 
-export function importFindings(
-  rootPath: string,
-  imports: Map<string, ImportRef[]>,
-  manifest: Manifest,
-): Finding[] {
+export function importFindings(context: DependencyContext, imports: Map<string, ImportRef[]>): Finding[] {
   const knownFiles = new Set(imports.keys());
   const findings: Finding[] = [];
   for (const [file, refs] of imports) {
     for (const ref of refs) {
-      if (ref.specifierKind === 'relative') {
-        const resolved = resolveRelativeImport(file, ref.specifier, knownFiles);
-        if (resolved !== undefined) continue;
-        if (existsOnDisk(rootPath, file, ref.specifier)) continue;
-        findings.push(
-          makeFinding({
-            tool: 'imports',
-            rule: 'unresolved-import',
-            file,
-            line: ref.line,
-            symbol: ref.specifier,
-            symbolKey: ref.specifier,
-            severity: 'critical',
-            message: `import vers '${ref.specifier}' : aucun fichier correspondant`,
-          }),
-        );
-        continue;
-      }
-      if (ref.specifierKind !== 'bare' && ref.specifierKind !== 'subpath') continue;
-      // Sans manifeste fiable, la règle se tait plutôt que de produire du bruit.
-      if (!manifest.trustworthy) continue;
-      const packageName = packageNameOf(ref.specifier);
-      if (isDeclared(manifest, ref.specifier, packageName)) continue;
-      findings.push(
-        makeFinding({
-          tool: 'imports',
-          rule: 'unknown-dependency',
-          file,
-          line: ref.line,
-          symbol: packageName,
-          symbolKey: packageName,
-          severity: 'critical',
-          message: `paquet '${packageName}' importé mais absent du package.json`,
-        }),
-      );
+      const finding = ref.specifierKind === 'relative'
+        ? unresolvedFinding(context.rootPath, file, ref, knownFiles)
+        : dependencyFinding(context, file, ref);
+      if (finding !== undefined) findings.push(finding);
     }
   }
   return findings.sort(compareFindings);
@@ -126,18 +191,20 @@ export function analyzeImports(
   rootPath: string,
   sourceFiles: Map<string, SourceFile>,
 ): ImportAnalysis {
-  const manifest = readManifest(rootPath);
+  const context = dependencyContext(rootPath, sourceFiles);
   const imports = collectImports(sourceFiles);
-  const graph = buildImportGraph(imports, manifest);
-  const findings = importFindings(rootPath, imports, manifest);
+  // Les alias du graphe restent ceux de la racine : pas de résolution par sous-projet.
+  const graph = buildImportGraph(imports, readManifest(rootPath));
+  const findings = importFindings(context, imports);
+  const untrusted = [...imports.keys()].map(context.manifestFor).find((manifest) => !manifest.trustworthy);
   const report: ImportsReport = {
     ...envelope(rootPath, 'ts-morph'),
-    manifestTrusted: manifest.trustworthy,
+    manifestTrusted: untrusted === undefined,
     summary: summarizeImports(imports, graph, findings),
     findings,
   };
-  if (manifest.untrustworthyReason !== undefined) {
-    report.manifestReason = manifest.untrustworthyReason;
+  if (untrusted?.untrustworthyReason !== undefined) {
+    report.manifestReason = untrusted.untrustworthyReason;
   }
   return { report, graph, imports };
 }

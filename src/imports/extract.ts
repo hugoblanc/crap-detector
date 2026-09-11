@@ -3,7 +3,7 @@
  * Sert deux usages : le graphe de dépendances internes (couplage caché)
  * et la détection de paquets hallucinés (slopsquatting).
  */
-import { Node } from 'ts-morph';
+import { Node, ts } from 'ts-morph';
 import type { SourceFile } from 'ts-morph';
 import { resolveAliasTargets } from './manifest.js';
 import type { Manifest } from './manifest.js';
@@ -75,6 +75,24 @@ export function fileImports(sourceFile: SourceFile): ImportRef[] {
   });
 
   return refs.sort((a, b) => a.line - b.line || a.specifier.localeCompare(b.specifier));
+}
+
+/**
+ * Modules encore importés une fois les types effacés, d'après l'émission de TypeScript : un
+ * import utilisé seulement en position de type disparaît, son paquet n'est pas chargé à
+ * l'exécution. Transpilation d'un fichier seul, sans métadonnées de décorateurs.
+ */
+export function runtimeImports(sourceFile: SourceFile): Set<string> {
+  const { outputText } = ts.transpileModule(sourceFile.getFullText(), {
+    fileName: sourceFile.getBaseName(),
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ESNext,
+      jsx: ts.JsxEmit.Preserve,
+      experimentalDecorators: true,
+    },
+  });
+  return new Set(ts.preProcessFile(outputText, true, true).importedFiles.map((ref) => ref.fileName));
 }
 
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.d.ts', '.js', '.jsx', '.mjs', '.cjs'];

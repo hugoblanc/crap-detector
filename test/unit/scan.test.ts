@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { renderSummary } from '../../src/cli/render.js';
 import { resolveConfig } from '../../src/core/config.js';
+import { makeFinding } from '../../src/core/findings.js';
 import { scanFast, scanFile } from '../../src/scan/fast.js';
-import { assertRatiosInRange, scanFull } from '../../src/scan/full.js';
+import { assertRatiosInRange, scanFull, withoutNativeDuplicates } from '../../src/scan/full.js';
 
 const created: string[] = [];
 const config = resolveConfig({});
@@ -68,7 +69,6 @@ describe('scanFast', () => {
       'erosion.fraction',
       'erosion.mass',
       'imports.unknown.count',
-      'orphans.count',
       'typesafety.escapes.count',
       'verbosity.fraction',
       'verbosity.lines',
@@ -111,6 +111,17 @@ describe('scanFile', () => {
   it('se tait sur les dépendances quand le package.json manque', () => {
     const root = makeRoot({ 'src/rogue.ts': "import 'left-pad';\n" });
     expect(scanFile(root, 'src/rogue.ts', config).findings).toEqual([]);
+  });
+
+  it('ne signale pas un paquet utilisé seulement comme type quand son @types est déclaré', () => {
+    const root = makeRoot({
+      'package.json': JSON.stringify({ devDependencies: { '@types/express': '5.0.0' } }),
+      'src/typed.ts': "import { Request } from 'express';\nexport const path = (req: Request): string => req.path;\n",
+      'src/runtime.ts': "import { json } from 'express';\nexport const parser = json();\n",
+    });
+    expect(scanFile(root, 'src/typed.ts', config).findings).toEqual([]);
+    expect(scanFile(root, 'src/runtime.ts', config).findings.map((finding) => finding.rule))
+      .toEqual(['unknown-dependency']);
   });
 });
 
@@ -215,6 +226,62 @@ describe('scanFull', () => {
     expect(renderSummary(report).join('\n')).not.toContain('findings knip');
   }, 180_000);
 
+  it('laisse les orphelins à knip et ne garde qu’un finding par paquet non déclaré', async () => {
+    const root = makeRoot({
+      'package.json': JSON.stringify({ name: 'web', dependencies: { next: '15.0.0' } }),
+      'node_modules/express/package.json': JSON.stringify({ name: 'express', main: 'index.js' }),
+      'node_modules/express/index.js': 'module.exports = {};\n',
+      'app/settings/page.tsx': [
+        "import { redirect } from 'next/navigation';",
+        'export default function Page(): never { return redirect("/"); }',
+      ].join('\n'),
+      'app/api/route.ts': [
+        "import express from 'express';",
+        "import ghost from 'ghost-pkg';",
+        'export const GET = (): unknown => [express, ghost];',
+      ].join('\n'),
+    });
+    const report = await scanFull(root, config, { skipChurn: true });
+    expect(report.deadCode?.available).toBe(true);
+    expect(report.aggregates['orphans.count']).toBeUndefined();
+    const rules = report.findings.map((finding) => [finding.tool, finding.rule, finding.symbol, finding.severity]);
+    expect(rules.filter(([, rule]) => rule === 'orphan' || rule === 'unused-file')).toEqual([]);
+    expect(rules.filter(([, rule]) => String(rule).endsWith('-dependency')).sort()).toEqual([
+      ['imports', 'unknown-dependency', 'ghost-pkg', 'critical'],
+      ['imports', 'unlisted-dependency', 'express', 'major'],
+    ]);
+    expect(renderSummary(report).join('\n')).toContain('1 paquets introuvables, 1 installés mais non déclarés');
+  }, 180_000);
+
+  it('sans knip, compte les tests comme importeurs sans les mesurer', async () => {
+    const root = makeRoot({
+      ...PROJECT,
+      'src/tested.ts': 'export const tested = 1;\n',
+      'src/tested.test.ts': "import { tested } from './tested.js';\nvoid tested;\n",
+      'src/lost.ts': 'export const lost = 1;\n',
+    });
+    const report = await scanFull(root, config, { skipChurn: true, skipExternalTools: true });
+    expect(report.filesScanned).toBe(4);
+    expect(report.dependencies.orphans).toEqual(['src/lost.ts']);
+    expect(report.aggregates['orphans.count']).toBe(1);
+    expect(report.findings.filter((finding) => finding.rule === 'orphan').map((finding) => finding.file))
+      .toEqual(['src/lost.ts']);
+  });
+
+  it('signale les sous-dossiers qui ont leur propre package.json', async () => {
+    const root = makeRoot({
+      ...PROJECT,
+      'dashboard/package.json': JSON.stringify({ dependencies: { chart: '1.0.0' } }),
+      'dashboard/node_modules/chart/package.json': '{}',
+      'dashboard/src/view.ts': "import { draw } from 'chart';\nexport const view = draw;\n",
+    });
+    const report = await scanFull(root, config, { skipChurn: true, skipExternalTools: true });
+    expect(report.scope.subprojects).toEqual(['dashboard']);
+    expect(report.findings.filter((finding) => finding.rule.endsWith('-dependency'))).toEqual([]);
+    expect(renderSummary(report).join('\n'))
+      .toContain('sous-projets dashboard ont leur propre package.json : scanner chacun avec --root');
+  });
+
   it('garde la verbosité sous 1 quand les clones couvrent des lignes blanches', async () => {
     const documented = Array.from({ length: 42 }, (_, i) => [
       '/**',
@@ -254,6 +321,23 @@ describe('scanFull', () => {
     const report = await scanFull(root, config, { skipChurn: true, skipExternalTools: true });
     expect(report.aggregates['verbosity.fraction']).toBeGreaterThan(0);
     expect(report.aggregates['verbosity.fraction']).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('withoutNativeDuplicates', () => {
+  it('écarte l’unlisted-dependency de knip seulement sur un fichier source que la règle native a jugé', () => {
+    const unlisted = (file: string) => makeFinding({
+      tool: 'knip', rule: 'unlisted-dependency', file, symbol: 'express', message: 'non déclaré',
+    });
+    const root = makeRoot({ 'app/package.json': '{}', 'app/a.ts': '', 'loose/b.ts': '' });
+    const deadCode = {
+      generatorVersion: '0.1.0', generatedAt: '', rootPath: root, toolVersion: '6.32.2', available: true,
+      summary: { unusedFiles: 0, unusedExports: 0, unusedTypes: 0, unusedDependencies: 0 },
+      findings: [unlisted('app/a.ts'), unlisted('app/package.json'), unlisted('loose/b.ts')],
+      outOfScope: 0,
+    };
+    const kept = withoutNativeDuplicates(root, ['app/a.ts', 'loose/b.ts'], deadCode).findings;
+    expect(kept.map((finding) => finding.file)).toEqual(['app/package.json', 'loose/b.ts']);
   });
 });
 

@@ -12,6 +12,7 @@ import {
   normalizeRelative,
   packageNameOf,
   resolveRelativeImport,
+  runtimeImports,
 } from '../../src/imports/extract.js';
 import type { ImportRef } from '../../src/imports/extract.js';
 import {
@@ -22,6 +23,7 @@ import {
 } from '../../src/imports/manifest.js';
 import type { Manifest } from '../../src/imports/manifest.js';
 import { analyzeImports, importFindings } from '../../src/imports/analyze.js';
+import type { DependencyContext } from '../../src/imports/analyze.js';
 
 const created: string[] = [];
 
@@ -237,6 +239,7 @@ describe('readManifest', () => {
 
 describe('isDeclared', () => {
   const manifest: Manifest = {
+    dir: '',
     dependencies: new Set(['ts-morph']),
     subpathImports: ['#core/*'],
     pathAliases: ['@app/*'],
@@ -258,6 +261,7 @@ describe('isDeclared', () => {
 
 describe('importFindings', () => {
   const manifest: Manifest = {
+    dir: '',
     dependencies: new Set(['ts-morph']),
     subpathImports: [],
     pathAliases: [],
@@ -265,6 +269,10 @@ describe('importFindings', () => {
     baseUrl: '',
     trustworthy: true,
   };
+
+  function context(rootPath: string, governing: Manifest = manifest): DependencyContext {
+    return { rootPath, manifestFor: () => governing, isRuntimeImport: () => true };
+  }
 
   function refs(...entries: Array<[string, ImportRef['specifierKind']]>): ImportRef[] {
     return entries.map(([specifier, specifierKind], index) => ({
@@ -275,11 +283,10 @@ describe('importFindings', () => {
     }));
   }
 
-  it('signale un paquet absent du package.json en critique', () => {
+  it('signale en critique un paquet absent du package.json et de node_modules', () => {
     const findings = importFindings(
-      '/nowhere',
+      context('/nowhere'),
       new Map([['src/a.ts', refs(['left-pad', 'bare'])]]),
-      manifest,
     );
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({
@@ -292,20 +299,41 @@ describe('importFindings', () => {
     });
   });
 
+  it('signale en majeur, une seule fois, un paquet installé mais non déclaré', () => {
+    const root = makeRoot({ 'node_modules/express/package.json': '{}', 'src/a.ts': '' });
+    const findings = importFindings(
+      context(root),
+      new Map([['src/a.ts', refs(['express', 'bare'], ['left-pad', 'bare'])]]),
+    );
+    expect(findings.map((finding) => [finding.rule, finding.symbol, finding.severity])).toEqual([
+      ['unknown-dependency', 'left-pad', 'critical'],
+      ['unlisted-dependency', 'express', 'major'],
+    ]);
+  });
+
+  it('ignore un import de types seuls couvert par un @types déclaré, pas un import utilisé comme valeur', () => {
+    const withTypes = { ...manifest, dependencies: new Set(['@types/express']) };
+    const typeOnly = importFindings(
+      { ...context('/nowhere', withTypes), isRuntimeImport: () => false },
+      new Map([['src/a.ts', refs(['express', 'bare'])]]),
+    );
+    expect(typeOnly).toEqual([]);
+    const asValue = importFindings(context('/nowhere', withTypes), new Map([['src/a.ts', refs(['express', 'bare'])]]));
+    expect(asValue[0]).toMatchObject({ rule: 'unknown-dependency', symbol: 'express' });
+  });
+
   it('laisse passer dépendance déclarée, module natif et chemin absolu', () => {
     const findings = importFindings(
-      '/nowhere',
+      context('/nowhere'),
       new Map([['src/a.ts', refs(['ts-morph', 'bare'], ['node:fs', 'builtin'], ['/abs', 'absolute'])]]),
-      manifest,
     );
     expect(findings).toEqual([]);
   });
 
   it('se tait entièrement quand le manifeste n’est pas fiable', () => {
     const findings = importFindings(
-      '/nowhere',
+      context('/nowhere', { ...manifest, trustworthy: false, untrustworthyReason: 'package.json introuvable' }),
       new Map([['src/a.ts', refs(['left-pad', 'bare'])]]),
-      { ...manifest, trustworthy: false, untrustworthyReason: 'package.json introuvable' },
     );
     expect(findings).toEqual([]);
   });
@@ -313,9 +341,8 @@ describe('importFindings', () => {
   it('signale un import relatif qui ne mène nulle part', () => {
     const root = makeRoot({ 'package.json': '{}', 'src/a.ts': '' });
     const findings = importFindings(
-      root,
+      context(root),
       new Map([['src/a.ts', refs(['./fantome.js', 'relative'])]]),
-      manifest,
     );
     expect(findings[0]).toMatchObject({ rule: 'unresolved-import', symbol: './fantome.js' });
   });
@@ -328,25 +355,37 @@ describe('importFindings', () => {
       'src/generated.ts': '',
     });
     const findings = importFindings(
-      root,
+      context(root),
       new Map([['src/a.ts', refs(['./data.json', 'relative'], ['./generated.js', 'relative'])]]),
-      manifest,
     );
     expect(findings).toEqual([]);
   });
 
   it('garde le même id quand l’import change de ligne', () => {
     const one = importFindings(
-      '/nowhere',
+      context('/nowhere'),
       new Map([['src/a.ts', refs(['left-pad', 'bare'])]]),
-      manifest,
     );
     const two = importFindings(
-      '/nowhere',
+      context('/nowhere'),
       new Map([['src/a.ts', [{ specifier: 'left-pad', specifierKind: 'bare', kind: 'import', line: 42 }]]]),
-      manifest,
     );
     expect(two[0]?.id).toBe(one[0]?.id);
+  });
+});
+
+describe('runtimeImports', () => {
+  it('efface un import utilisé seulement comme type, garde un import utilisé comme valeur', () => {
+    const sources = makeProject({
+      'src/a.ts': [
+        "import type { Request } from 'express';",
+        "import { Response } from 'koa';",
+        "import { Router } from 'fastify';",
+        'export const router = Router();',
+        'export function handle(req: Request, res: Response): void { void req; void res; }',
+      ].join('\n'),
+    });
+    expect([...runtimeImports(sources.get('src/a.ts') as SourceFile)]).toEqual(['fastify']);
   });
 });
 
@@ -372,6 +411,21 @@ describe('analyzeImports', () => {
     });
     expect(report.findings.map((finding) => finding.symbol)).toEqual(['left-pad']);
     expect(areLinked(graph, 'src/a.ts', 'src/b.ts')).toBe(true);
+  });
+
+  it('juge un sous-dossier contre son propre package.json', () => {
+    const root = makeRoot({
+      'package.json': JSON.stringify({ dependencies: { 'root-only': '1.0.0' } }),
+      'node_modules/root-only/package.json': '{}',
+      'sub/package.json': JSON.stringify({ dependencies: { 'sub-only': '1.0.0' } }),
+      'sub/node_modules/sub-only/package.json': '{}',
+      'sub/src/main.ts': '',
+    });
+    const sources = makeProject({ 'sub/src/main.ts': "import 'sub-only';\nimport 'root-only';\n" });
+    const { report } = analyzeImports(root, sources);
+    expect(report.findings.map((finding) => [finding.rule, finding.symbol, finding.message])).toEqual([
+      ['unlisted-dependency', 'root-only', "paquet 'root-only' installé mais absent de sub/package.json"],
+    ]);
   });
 
   it('désactive la règle et explique pourquoi sans package.json', () => {

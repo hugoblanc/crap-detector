@@ -72,6 +72,8 @@ function report(options: ReportOptions = {}): ScanReport {
       exclude: defaultScope().exclude,
       gitignore: options.gitignore ?? true,
       toolsScoped: true,
+      importRules: 2,
+      subprojects: [],
     },
     metrics: { ...envelope, filesScanned: 3, summary: {} as never, files: [], findings: [] },
     slop: { ...envelope, summary: {} as never, findings: [] },
@@ -217,24 +219,32 @@ describe('incompatibilityReason', () => {
     const withoutFilter = makeBaseline(report({ withKnip: true, gitignore: false }));
     expect(incompatibilityReason(withoutFilter, report({ withKnip: true })))
       .toMatch(/sans exclure les fichiers ignorés par git/);
-    const { include, exclude } = baseline.scope;
-    const legacy = { ...baseline, scope: { include, exclude, toolsScoped: true } } as unknown as Baseline;
+    const { include, exclude, importRules } = baseline.scope;
+    const legacy = { ...baseline, scope: { include, exclude, toolsScoped: true, importRules } } as unknown as Baseline;
     expect(incompatibilityReason(legacy, report({ withKnip: true })))
       .toMatch(/sans exclure les fichiers ignorés par git/);
   });
 
   it('refuse une baseline qui comptait knip et jscpd hors du périmètre', () => {
-    const { include, exclude, gitignore } = baseline.scope;
-    const legacy = { ...baseline, scope: { include, exclude, gitignore } } as unknown as Baseline;
+    const { include, exclude, gitignore, importRules } = baseline.scope;
+    const legacy = { ...baseline, scope: { include, exclude, gitignore, importRules } } as unknown as Baseline;
     expect(incompatibilityReason(legacy, report({ withKnip: true })))
       .toMatch(/hors du périmètre : refaire la baseline/);
   });
 
   it('accepte sans ce champ une baseline écrite sans knip ni jscpd', () => {
     const withoutTools = makeBaseline(report());
-    const { include, exclude, gitignore } = withoutTools.scope;
-    const legacy = { ...withoutTools, scope: { include, exclude, gitignore } } as unknown as Baseline;
+    const { include, exclude, gitignore, importRules } = withoutTools.scope;
+    const legacy = { ...withoutTools, scope: { include, exclude, gitignore, importRules } } as unknown as Baseline;
     expect(incompatibilityReason(legacy, report({ withKnip: true }))).toBeUndefined();
+  });
+
+  it('refuse une baseline écrite avec les règles d’imports antérieures, même sans outils', () => {
+    const { include, exclude, gitignore, toolsScoped } = baseline.scope;
+    const legacy = { ...baseline, scope: { include, exclude, gitignore, toolsScoped } } as unknown as Baseline;
+    expect(incompatibilityReason(legacy, report({ withKnip: true }))).toMatch(/règles antérieures/);
+    expect(incompatibilityReason({ ...legacy, toolVersions: { 'ts-morph': 'ts-morph' } }, report()))
+      .toMatch(/règles antérieures/);
   });
 
   it('dit pourquoi un scan n’a pas pu appliquer le filtrage de la baseline', () => {
@@ -409,6 +419,22 @@ describe('compareToBaseline', () => {
     expect(result.improvements).toEqual([]);
     expect(result.skippedKeys).toContain('knip|unused-export|src/a.ts');
     expect(result.passed).toBe(true);
+  });
+
+  it('ne compare pas les orphelins mesurés d’un seul côté, dans un sens comme dans l’autre', () => {
+    const orphan = finding({ tool: 'depcruise', rule: 'orphan', file: 'src/lost.ts' });
+    const withKnip = makeBaseline(report({ withKnip: true }));
+    const noTools = report({ aggregates: { 'orphans.count': 1 }, findings: [orphan] });
+    const againstKnip = compareToBaseline(withKnip, noTools);
+    expect(againstKnip.passed).toBe(true);
+    expect(againstKnip.skippedKeys).toContain('depcruise|orphan|src/lost.ts');
+
+    const againstNoTools = compareToBaseline(makeBaseline(noTools), report({ withKnip: true }));
+    expect(againstNoTools.improvements).toEqual([]);
+    expect(againstNoTools.skippedKeys).toContain('depcruise|orphan|src/lost.ts');
+
+    const bothMeasured = compareToBaseline(makeBaseline(report({ aggregates: { 'orphans.count': 0 } })), noTools);
+    expect(bothMeasured.passed).toBe(false);
   });
 
   it('compte bien l’amélioration quand l’outil a tourné et ne trouve plus rien', () => {
