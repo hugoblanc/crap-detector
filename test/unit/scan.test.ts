@@ -77,6 +77,19 @@ describe('scanFast', () => {
     expect(result.aggregates['duplication.percent']).toBeUndefined();
   });
 
+  it('ne mesure pas une règle désactivée par défaut, la compte une fois activée', () => {
+    const root = makeRoot({
+      ...PROJECT,
+      'src/pick.ts': 'export function pick(flag: boolean): number {\n  if (flag) { return 1; } else { return 2; }\n}\n',
+    });
+    const byDefault = scanFast(root, config);
+    expect(byDefault.slop.summary.hitsByRule['redundant-else']).toBeUndefined();
+    expect(byDefault.findings.map((finding) => finding.rule)).not.toContain('redundant-else');
+    const enabled = scanFast(root, resolveConfig({ rules: { 'redundant-else': true } }));
+    expect(enabled.slop.summary.hitsByRule['redundant-else']).toBe(1);
+    expect(enabled.aggregates['verbosity.lines']).toBe((byDefault.aggregates['verbosity.lines'] ?? 0) + 1);
+  });
+
   it('fusionne les findings de tous les analyseurs', () => {
     const rules = new Set(scanFast(makeRoot(PROJECT), config).findings.map((f) => f.rule));
     expect(rules.has('empty-catch')).toBe(true);

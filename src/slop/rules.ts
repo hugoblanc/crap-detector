@@ -14,7 +14,8 @@
  * une règle bruyante tue la confiance dans tout l'outil en une semaine.
  */
 import { Node, SyntaxKind } from 'ts-morph';
-import type { Node as TsNode, SourceFile } from 'ts-morph';
+import type { IfStatement, Node as TsNode, SourceFile } from 'ts-morph';
+import type { OptionalRule, RuleSwitches } from '../core/config.js';
 import type { Severity } from '../core/types.js';
 import { isFunctionLike } from '../metrics/cognitive.js';
 import type { FunctionLikeNode } from '../metrics/cognitive.js';
@@ -117,14 +118,31 @@ function endsFlow(statement: TsNode | undefined): boolean {
     || Node.isBreakStatement(statement);
 }
 
-/** `if (…) { return x; } else { … }` : le else n'apporte qu'un niveau d'imbrication. */
+/** Branches `then` de la chaîne `if / else if` qui aboutit à ce `if`, lui compris. */
+function chainBranches(statement: IfStatement): TsNode[] {
+  const branches: TsNode[] = [statement.getThenStatement()];
+  let current: IfStatement = statement;
+  let parent = statement.getParent();
+  while (Node.isIfStatement(parent) && parent.getElseStatement() === current) {
+    branches.push(parent.getThenStatement());
+    current = parent;
+    parent = parent.getParent();
+  }
+  return branches;
+}
+
+/**
+ * `if (…) { return x; } else { … }` : le else n'apporte qu'un niveau d'imbrication.
+ * Seulement si toutes les branches de la chaîne sortent : dans `if (a) {…} else if (b) { return; } else {…}`,
+ * retirer le else exécuterait son bloc après la branche `a` (#6).
+ */
 function redundantElse(sourceFile: SourceFile, file: string, hits: SlopHit[]): void {
   for (const statement of sourceFile.getDescendantsOfKind(SyntaxKind.IfStatement)) {
     const elseStatement = statement.getElseStatement();
     if (elseStatement === undefined || Node.isIfStatement(elseStatement)) continue;
-    if (!endsFlow(statement.getThenStatement())) continue;
+    if (!chainBranches(statement).every(endsFlow)) continue;
     hits.push(
-      hit(file, elseStatement, 'redundant-else', 'minor', 'else inutile après un then qui sort'),
+      hit(file, elseStatement, 'redundant-else', 'minor', 'else inutile : toutes les branches précédentes sortent'),
     );
   }
 }
@@ -181,29 +199,40 @@ function soleReturnedExpression(fn: FunctionLikeNode): TsNode | undefined {
   return only.getExpression();
 }
 
+/** Passée en argument, la fonction fixe le nombre d'arguments que l'appelé reçoit. */
+function isCallArgument(fn: FunctionLikeNode): boolean {
+  const parent = fn.getParent();
+  return (Node.isCallExpression(parent) || Node.isNewExpression(parent))
+    && (parent.getArguments() as TsNode[]).includes(fn);
+}
+
 /**
- * Wrapper qui transmet ses paramètres à l'identique, sans rien ajouter.
+ * Fonction qui transmet ses paramètres à l'identique à une fonction libre, sans rien ajouter.
  * Restreint aux fonctions à au moins un paramètre, tous repassés dans le même
  * ordre : un `() => doThing()` est souvent un usage légitime de la paresse.
+ * Trois formes gardent un rôle et ne sont pas visées (#5) : un callback passé en argument
+ * (`filter((x) => allowed.includes(x))` donnerait sinon l'index à `includes`), un appel de
+ * méthode (`this.format(x)` perdrait sa liaison de `this`), une garde de type.
  */
+function isPassthrough(fn: FunctionLikeNode): boolean {
+  const parameters = fn.getParameters();
+  if (parameters.length === 0 || isCallArgument(fn)) return false;
+  if (fn.getReturnTypeNode()?.getKind() === SyntaxKind.TypePredicate) return false;
+  if (parameters.some((parameter) => !Node.isIdentifier(parameter.getNameNode()))) return false;
+  const expression = soleReturnedExpression(fn);
+  if (!Node.isCallExpression(expression) || !Node.isIdentifier(expression.getExpression())) return false;
+  const args = expression.getArguments();
+  return args.length === parameters.length && args.every(
+    (argument, index) => Node.isIdentifier(argument) && argument.getText() === parameters[index]?.getName(),
+  );
+}
+
 function passthroughWrapper(sourceFile: SourceFile, file: string, hits: SlopHit[]): void {
   const functions: FunctionLikeNode[] = [];
   sourceFile.forEachDescendant((node) => {
     if (isFunctionLike(node)) functions.push(node as FunctionLikeNode);
   });
-  for (const fn of functions) {
-    const parameters = fn.getParameters();
-    if (parameters.length === 0) continue;
-    if (parameters.some((parameter) => !Node.isIdentifier(parameter.getNameNode()))) continue;
-    const expression = soleReturnedExpression(fn);
-    if (expression === undefined || !Node.isCallExpression(expression)) continue;
-    const args = expression.getArguments();
-    if (args.length !== parameters.length) continue;
-    const identical = args.every(
-      (argument, index) =>
-        Node.isIdentifier(argument) && argument.getText() === parameters[index]?.getName(),
-    );
-    if (!identical) continue;
+  for (const fn of functions.filter(isPassthrough)) {
     hits.push(
       hit(
         file,
@@ -260,16 +289,24 @@ function tsComments(sourceFile: SourceFile, file: string, hits: SlopHit[]): void
   });
 }
 
-/** Toutes les occurrences de slop du fichier, triées par ligne. */
-export function slopHits(sourceFile: SourceFile, file: string): SlopHit[] {
+type RuleCheck = (sourceFile: SourceFile, file: string, hits: SlopHit[]) => void;
+
+const CHECKS: readonly RuleCheck[] = [catchRules, explicitAny, doubleAssertion, tsComments];
+
+/** Désactivées par défaut : non parcourues, donc ni comptées ni coûteuses pour le hook. */
+const OPTIONAL_CHECKS: ReadonlyArray<readonly [OptionalRule, RuleCheck]> = [
+  ['redundant-else', redundantElse],
+  ['assign-then-return', assignThenReturn],
+  ['boolean-ternary', booleanTernary],
+  ['passthrough-wrapper', passthroughWrapper],
+];
+
+/** Occurrences de slop du fichier pour les règles actives, triées par ligne. */
+export function slopHits(sourceFile: SourceFile, file: string, rules: RuleSwitches): SlopHit[] {
   const hits: SlopHit[] = [];
-  catchRules(sourceFile, file, hits);
-  redundantElse(sourceFile, file, hits);
-  assignThenReturn(sourceFile, file, hits);
-  booleanTernary(sourceFile, file, hits);
-  passthroughWrapper(sourceFile, file, hits);
-  explicitAny(sourceFile, file, hits);
-  doubleAssertion(sourceFile, file, hits);
-  tsComments(sourceFile, file, hits);
+  for (const check of CHECKS) check(sourceFile, file, hits);
+  for (const [rule, check] of OPTIONAL_CHECKS) {
+    if (rules[rule]) check(sourceFile, file, hits);
+  }
   return hits.sort((a, b) => a.line - b.line || a.rule.localeCompare(b.rule));
 }

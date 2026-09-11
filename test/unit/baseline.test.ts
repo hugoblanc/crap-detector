@@ -73,6 +73,7 @@ function report(options: ReportOptions = {}): ScanReport {
       gitignore: options.gitignore ?? true,
       toolsScoped: true,
       importRules: 2,
+      rules: [],
       subprojects: [],
     },
     metrics: { ...envelope, filesScanned: 3, summary: {} as never, files: [], findings: [] },
@@ -234,9 +235,19 @@ describe('incompatibilityReason', () => {
 
   it('accepte sans ce champ une baseline écrite sans knip ni jscpd', () => {
     const withoutTools = makeBaseline(report());
-    const { include, exclude, gitignore, importRules } = withoutTools.scope;
-    const legacy = { ...withoutTools, scope: { include, exclude, gitignore, importRules } } as unknown as Baseline;
+    const { include, exclude, gitignore, importRules, rules } = withoutTools.scope;
+    const legacy = { ...withoutTools, scope: { include, exclude, gitignore, importRules, rules } } as unknown as Baseline;
     expect(incompatibilityReason(legacy, report({ withKnip: true }))).toBeUndefined();
+  });
+
+  it('refuse une baseline écrite avec un autre jeu de règles optionnelles, ou avant leur sélection', () => {
+    const withElse = report({ withKnip: true });
+    withElse.scope.rules = ['redundant-else'];
+    expect(incompatibilityReason(baseline, withElse))
+      .toMatch(/règles optionnelles activées modifiées \(aucune → redundant-else\)/);
+    const { include, exclude, gitignore, toolsScoped, importRules } = baseline.scope;
+    const legacy = { ...baseline, scope: { include, exclude, gitignore, toolsScoped, importRules } } as unknown as Baseline;
+    expect(incompatibilityReason(legacy, report({ withKnip: true }))).toMatch(/avant la sélection des règles/);
   });
 
   it('refuse une baseline écrite avec les règles d’imports antérieures, même sans outils', () => {

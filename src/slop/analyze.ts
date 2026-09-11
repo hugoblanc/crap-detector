@@ -9,6 +9,7 @@
  * inutile ne compte qu'une fois.
  */
 import type { SourceFile } from 'ts-morph';
+import type { RuleSwitches } from '../core/config.js';
 import { compareFindings, envelope, makeFinding } from '../core/findings.js';
 import type { Finding, Severity, SlopReport, SlopSummary } from '../core/types.js';
 import { fileSloc, keepSlocLines } from '../metrics/sizes.js';
@@ -143,11 +144,12 @@ export interface SlopAnalysis {
 export function analyzeSlop(
   rootPath: string,
   sourceFiles: Map<string, SourceFile>,
+  rules: RuleSwitches,
   options: SlopOptions = {},
 ): SlopAnalysis {
   const hits: SlopHit[] = [];
   for (const [file, sourceFile] of sourceFiles) {
-    hits.push(...slopHits(sourceFile, file));
+    hits.push(...slopHits(sourceFile, file, rules));
   }
   return {
     report: {

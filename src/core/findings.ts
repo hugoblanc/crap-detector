@@ -1,6 +1,35 @@
 import { createHash } from 'node:crypto';
-import type { Finding, Severity, ToolId } from './types.js';
 import { appVersion } from './version.js';
+
+export type Severity = 'info' | 'minor' | 'major' | 'critical';
+
+export type ToolId =
+  | 'metrics'
+  | 'churn'
+  | 'imports'
+  | 'knip'
+  | 'jscpd'
+  | 'depcruise';
+
+/** Un constat ponctuel, localisé et actionnable. */
+export interface Finding {
+  /** Stable si le code bouge dans le fichier : sha1(tool|rule|file|symbolKey), 12 hex. */
+  id: string;
+  tool: ToolId;
+  /** Ex. 'cyclomatic-complexity', 'duplicate-block', 'unused-export', 'cycle'. */
+  rule: string;
+  severity: Severity;
+  /** Chemin POSIX relatif à rootPath. */
+  file: string;
+  line?: number;
+  /** 'Class.method' | 'fnName' ; fallback '#arrow@L<n>' pour les fonctions anonymes. */
+  symbol?: string;
+  value?: number;
+  threshold?: number;
+  message: string;
+  /** Au-delà du seuil du cliquet, donc compté, mais pas du seuil de signalement : masqué du texte sans --all. */
+  belowReportThreshold?: true;
+}
 
 /**
  * Id stable aux décalages de lignes dans le fichier :

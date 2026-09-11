@@ -5,8 +5,10 @@ import { dirname, join } from 'node:path';
 import { findPackageDir, parseJsonOutput, resolveTool, runTool } from '../../src/adapters/run.js';
 import { analyzeDeadCode, mapKnipReport } from '../../src/adapters/knip.js';
 import { analyzeDuplication, mapJscpdReport } from '../../src/adapters/jscpd.js';
+import { resolveConfig } from '../../src/core/config.js';
 
 const created: string[] = [];
+const withTypes = resolveConfig({ rules: { 'unused-type': true } }).rules;
 
 function makeRoot(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), 'crap-detector-adapters-'));
@@ -110,7 +112,7 @@ describe('mapKnipReport', () => {
   };
 
   it('compte chaque catégorie dans le résumé', () => {
-    expect(mapKnipReport(report, scope).summary).toEqual({
+    expect(mapKnipReport(report, scope, withTypes).summary).toEqual({
       unusedFiles: 1,
       unusedExports: 1,
       unusedTypes: 1,
@@ -119,7 +121,7 @@ describe('mapKnipReport', () => {
   });
 
   it('produit un finding par entrée, avec règle et ligne', () => {
-    const findings = mapKnipReport(report, scope).findings;
+    const findings = mapKnipReport(report, scope, withTypes).findings;
     const unusedExport = findings.find((finding) => finding.symbol === 'unusedHelper');
     expect(unusedExport).toMatchObject({
       tool: 'knip',
@@ -143,7 +145,7 @@ describe('mapKnipReport', () => {
         { file: 'packages/web/package.json', dependencies: [{ name: 'react', line: 4 }] },
         { file: 'src/a.test.ts', exports: [{ name: 'fixture', line: 1 }] },
       ],
-    }, [...scope, 'packages/web/src/page.tsx']);
+    }, [...scope, 'packages/web/src/page.tsx'], withTypes);
     expect(mapping.outOfScope).toBe(4);
     expect(mapping.summary).toEqual({
       unusedFiles: 1,
@@ -155,22 +157,29 @@ describe('mapKnipReport', () => {
   });
 
   it('ne garde aucun finding, pas même de dépendance, sur un périmètre vide', () => {
-    expect(mapKnipReport(report, []).findings).toEqual([]);
+    expect(mapKnipReport(report, [], withTypes).findings).toEqual([]);
+  });
+
+  it('ne mesure pas les types inutilisés tant que unused-type n’est pas activée', () => {
+    const mapping = mapKnipReport(report, scope, resolveConfig({}).rules);
+    expect(mapping.findings.some((finding) => finding.rule === 'unused-type')).toBe(false);
+    expect(mapping.summary.unusedTypes).toBeUndefined();
+    expect(mapping.summary.unusedExports).toBe(1);
   });
 
   it('garde un id stable quand la ligne change', () => {
-    const before = mapKnipReport(report, scope).findings
+    const before = mapKnipReport(report, scope, withTypes).findings
       .find((finding) => finding.symbol === 'unusedHelper');
     const moved = mapKnipReport({
       issues: [{ file: 'src/a.ts', exports: [{ name: 'unusedHelper', line: 99 }] }],
-    }, scope).findings[0];
+    }, scope, withTypes).findings[0];
     expect(moved?.id).toBe(before?.id);
   });
 
   it('tolère une sortie vide ou malformée', () => {
-    expect(mapKnipReport({}, scope).findings).toEqual([]);
-    expect(mapKnipReport({ issues: 'pas un tableau' }, scope).findings).toEqual([]);
-    expect(mapKnipReport({ issues: [{ exports: [{ name: 'x' }] }] }, scope).findings).toEqual([]);
+    expect(mapKnipReport({}, scope, withTypes).findings).toEqual([]);
+    expect(mapKnipReport({ issues: 'pas un tableau' }, scope, withTypes).findings).toEqual([]);
+    expect(mapKnipReport({ issues: [{ exports: [{ name: 'x' }] }] }, scope, withTypes).findings).toEqual([]);
   });
 });
 
@@ -253,7 +262,7 @@ describe('analyzeDeadCode sur un vrai projet', () => {
       'src/index.ts': "export { used } from './helpers.js';\n",
       'src/helpers.ts': ['export const used = 1;', 'export const neverUsed = 2;'].join('\n'),
     });
-    const report = analyzeDeadCode(root, ['src/helpers.ts', 'src/index.ts']);
+    const report = analyzeDeadCode(root, ['src/helpers.ts', 'src/index.ts'], resolveConfig({}).rules);
     expect(report.available).toBe(true);
     expect(report.summary.unusedExports).toBeGreaterThanOrEqual(1);
     expect(report.findings.some((finding) => finding.symbol === 'neverUsed')).toBe(true);

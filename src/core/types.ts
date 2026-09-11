@@ -3,35 +3,10 @@
  * Aucune logique ici : uniquement des types.
  */
 import type { ThresholdsSnapshot } from './config.js';
+import type { Finding } from './findings.js';
 import type { BaselineScope, ReportScope } from './scope.js';
 
-export type Severity = 'info' | 'minor' | 'major' | 'critical';
-
-export type ToolId =
-  | 'metrics'
-  | 'churn'
-  | 'imports'
-  | 'knip'
-  | 'jscpd'
-  | 'depcruise';
-
-/** Un constat ponctuel, localisé et actionnable. */
-export interface Finding {
-  /** Stable si le code bouge dans le fichier : sha1(tool|rule|file|symbolKey), 12 hex. */
-  id: string;
-  tool: ToolId;
-  /** Ex. 'cyclomatic-complexity', 'duplicate-block', 'unused-export', 'cycle'. */
-  rule: string;
-  severity: Severity;
-  /** Chemin POSIX relatif à rootPath. */
-  file: string;
-  line?: number;
-  /** 'Class.method' | 'fnName' ; fallback '#arrow@L<n>' pour les fonctions anonymes. */
-  symbol?: string;
-  value?: number;
-  threshold?: number;
-  message: string;
-}
+export type { Finding, Severity, ToolId } from './findings.js';
 
 export interface FunctionMetrics {
   symbol: string;
@@ -123,7 +98,8 @@ export interface ImportsReport extends ReportEnvelope {
 export interface DeadCodeSummary {
   unusedFiles: number;
   unusedExports: number;
-  unusedTypes: number;
+  /** Absent quand la règle unused-type est désactivée : non mesuré. */
+  unusedTypes?: number;
   unusedDependencies: number;
 }
 

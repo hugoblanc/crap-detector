@@ -27,6 +27,41 @@ export interface Thresholds {
 export type ThresholdsSnapshot = Thresholds;
 
 /**
+ * Règle à deux niveaux → son seuil. Celui de `thresholds` reste le seuil du cliquet : tout ce
+ * qui le dépasse est compté dans la baseline. Celui de `reportThresholds` décide de ce que
+ * `scan`, `explain` et le hook `file` affichent par défaut. Sur cinq dépôts réels, les alertes
+ * jugées utiles avaient une valeur médiane proche du double de celle des alertes exactes mais
+ * inutiles (docs/PRECISION-2026-09.md).
+ */
+const REPORTED_RULES = {
+  'cyclomatic-complexity': 'cyclomaticComplexity',
+  'cognitive-complexity': 'cognitiveComplexity',
+  'function-length': 'maxLinesPerFunction',
+  'file-length': 'maxFileLines',
+  'nesting-depth': 'maxDepth',
+  'too-many-params': 'maxParams',
+} as const satisfies Record<string, keyof Thresholds>;
+
+export type ReportThresholds = Record<(typeof REPORTED_RULES)[keyof typeof REPORTED_RULES], number>;
+
+/**
+ * Règles désactivées par défaut : exactes, mais presque jamais utiles à corriger d'après la
+ * mesure de précision (docs/PRECISION-2026-09.md). Désactivées, elles ne sont pas mesurées.
+ */
+const OPTIONAL_RULES = [
+  'assign-then-return',
+  'boolean-ternary',
+  'nested-callbacks',
+  'passthrough-wrapper',
+  'redundant-else',
+  'unused-type',
+] as const;
+
+export type OptionalRule = (typeof OPTIONAL_RULES)[number];
+
+export type RuleSwitches = Record<OptionalRule, boolean>;
+
+/**
  * Paramètres de l'analyse comportementale (churn git, hotspots, couplage temporel).
  * windowDays suit la pratique CodeScene : douze mois d'historique.
  */
@@ -63,6 +98,15 @@ const DEFAULT_THRESHOLDS: Thresholds = {
   verbosityFraction: 0.2,
 };
 
+const DEFAULT_REPORT_THRESHOLDS: ReportThresholds = {
+  cyclomaticComplexity: 25,
+  cognitiveComplexity: 30,
+  maxLinesPerFunction: 100,
+  maxFileLines: 600,
+  maxDepth: 5,
+  maxParams: 6,
+};
+
 const DEFAULT_CHURN: ChurnConfig = {
   windowDays: 365,
   maxFilesPerCommit: 50,
@@ -90,6 +134,8 @@ const DEFAULT_SCOPE: ScopeConfig = {
 /** crap-detector.json du repo cible : tout est optionnel, fusionné sur les défauts. */
 export interface ProjectConfig {
   thresholds?: Partial<Thresholds>;
+  reportThresholds?: Partial<ReportThresholds>;
+  rules?: Partial<RuleSwitches>;
   scope?: Partial<ScopeConfig>;
   churn?: Partial<ChurnConfig>;
 }
@@ -123,10 +169,61 @@ function assertNumbers(prefix: string, partial: Record<string, unknown>): void {
   }
 }
 
+/** Une clé mal orthographiée ferait croire à un réglage qui ne s'applique pas. */
+function assertKnownKeys(prefix: string, partial: Record<string, unknown>, known: readonly string[]): void {
+  for (const key of Object.keys(partial)) {
+    if (!known.includes(key)) {
+      throw new Error(`${CONFIG_FILENAME}: ${prefix}.${key} inconnu, clés acceptées : ${known.join(', ')}`);
+    }
+  }
+}
+
 function assertStringArray(field: string, value: unknown): asserts value is string[] {
   if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) {
     throw new Error(`${CONFIG_FILENAME}: ${field} doit être un tableau de chaînes`);
   }
+}
+
+function section(parsed: Record<string, unknown>, field: string): Record<string, unknown> | undefined {
+  const value = parsed[field];
+  if (value === undefined) return undefined;
+  if (!isPlainObject(value)) {
+    throw new Error(`${CONFIG_FILENAME}: ${field} doit être un objet`);
+  }
+  return value;
+}
+
+function numberSection(parsed: Record<string, unknown>, field: string): Record<string, unknown> | undefined {
+  const value = section(parsed, field);
+  if (value !== undefined) assertNumbers(field, value);
+  return value;
+}
+
+function rulesSection(parsed: Record<string, unknown>): Partial<RuleSwitches> | undefined {
+  const rules = section(parsed, 'rules');
+  if (rules === undefined) return undefined;
+  assertKnownKeys('rules', rules, OPTIONAL_RULES);
+  for (const [rule, enabled] of Object.entries(rules)) {
+    if (typeof enabled !== 'boolean') {
+      throw new Error(`${CONFIG_FILENAME}: rules.${rule} doit valoir true ou false`);
+    }
+  }
+  return rules as Partial<RuleSwitches>;
+}
+
+function scopeSection(parsed: Record<string, unknown>): Partial<ScopeConfig> | undefined {
+  const scope = section(parsed, 'scope');
+  if (scope === undefined) return undefined;
+  const resolved: Partial<ScopeConfig> = {};
+  if (scope['include'] !== undefined) {
+    assertStringArray('scope.include', scope['include']);
+    resolved.include = scope['include'];
+  }
+  if (scope['exclude'] !== undefined) {
+    assertStringArray('scope.exclude', scope['exclude']);
+    resolved.exclude = scope['exclude'];
+  }
+  return resolved;
 }
 
 /**
@@ -144,55 +241,54 @@ export function loadProjectConfig(rootPath: string): ProjectConfig {
   if (!isPlainObject(parsed)) {
     throw new Error(`${CONFIG_FILENAME} doit contenir un objet JSON`);
   }
-  const config: ProjectConfig = {};
-  const thresholds = parsed['thresholds'];
-  if (thresholds !== undefined) {
-    if (!isPlainObject(thresholds)) {
-      throw new Error(`${CONFIG_FILENAME}: thresholds doit être un objet`);
-    }
-    assertNumbers('thresholds', thresholds);
-    config.thresholds = thresholds as Partial<Thresholds>;
+  const reportThresholds = numberSection(parsed, 'reportThresholds');
+  if (reportThresholds !== undefined) {
+    assertKnownKeys('reportThresholds', reportThresholds, Object.values(REPORTED_RULES));
   }
-  const churn = parsed['churn'];
-  if (churn !== undefined) {
-    if (!isPlainObject(churn)) {
-      throw new Error(`${CONFIG_FILENAME}: churn doit être un objet`);
-    }
-    assertNumbers('churn', churn);
-    config.churn = churn as Partial<ChurnConfig>;
-  }
-  const scope = parsed['scope'];
-  if (scope !== undefined) {
-    if (!isPlainObject(scope)) {
-      throw new Error(`${CONFIG_FILENAME}: scope doit être un objet`);
-    }
-    const resolved: Partial<ScopeConfig> = {};
-    if (scope['include'] !== undefined) {
-      assertStringArray('scope.include', scope['include']);
-      resolved.include = scope['include'];
-    }
-    if (scope['exclude'] !== undefined) {
-      assertStringArray('scope.exclude', scope['exclude']);
-      resolved.exclude = scope['exclude'];
-    }
-    config.scope = resolved;
-  }
-  return config;
+  return {
+    thresholds: numberSection(parsed, 'thresholds') as Partial<Thresholds> | undefined,
+    reportThresholds: reportThresholds as Partial<ReportThresholds> | undefined,
+    rules: rulesSection(parsed),
+    churn: numberSection(parsed, 'churn') as Partial<ChurnConfig> | undefined,
+    scope: scopeSection(parsed),
+  };
 }
 
 export interface ResolvedConfig {
   thresholds: Thresholds;
+  reportThresholds: ReportThresholds;
+  rules: RuleSwitches;
   scope: ScopeConfig;
   churn: ChurnConfig;
 }
 
 export function resolveConfig(config: ProjectConfig): ResolvedConfig {
+  const allDisabled = Object.fromEntries(OPTIONAL_RULES.map((rule) => [rule, false])) as RuleSwitches;
   return {
     thresholds: { ...defaultThresholds(), ...config.thresholds },
+    reportThresholds: { ...DEFAULT_REPORT_THRESHOLDS, ...config.reportThresholds },
+    rules: { ...allDisabled, ...config.rules },
     churn: { ...defaultChurn(), ...config.churn },
     scope: {
       include: config.scope?.include ?? defaultScope().include,
       exclude: config.scope?.exclude ?? defaultScope().exclude,
     },
   };
+}
+
+/** Une règle hors de OPTIONAL_RULES est toujours active. */
+export function isRuleEnabled(rules: RuleSwitches, rule: string): boolean {
+  return !(OPTIONAL_RULES as readonly string[]).includes(rule) || rules[rule as OptionalRule];
+}
+
+/** Règles optionnelles activées, triées : ce qui rend deux baselines comparables. */
+export function enabledOptionalRules(rules: RuleSwitches): string[] {
+  return OPTIONAL_RULES.filter((rule) => rules[rule]);
+}
+
+/** Seuil de signalement d'une règle, undefined pour une règle à un seul niveau. */
+export function reportThresholdOf(reportThresholds: ReportThresholds, rule: string): number | undefined {
+  return Object.hasOwn(REPORTED_RULES, rule)
+    ? reportThresholds[REPORTED_RULES[rule as keyof typeof REPORTED_RULES]]
+    : undefined;
 }

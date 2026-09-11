@@ -64,6 +64,43 @@ describe('loadProjectConfig', () => {
   });
 });
 
+describe('règles optionnelles et seuils de signalement', () => {
+  function configFile(content: unknown): string {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, CONFIG_FILENAME), JSON.stringify(content), 'utf8');
+    return dir;
+  }
+
+  it('désactive les règles optionnelles et fixe le signalement à environ deux fois le cliquet', () => {
+    const resolved = resolveConfig({});
+    expect(Object.values(resolved.rules).every((enabled) => !enabled)).toBe(true);
+    expect(resolved.reportThresholds).toEqual({
+      cyclomaticComplexity: 25,
+      cognitiveComplexity: 30,
+      maxLinesPerFunction: 100,
+      maxFileLines: 600,
+      maxDepth: 5,
+      maxParams: 6,
+    });
+  });
+
+  it('réactive une règle et règle un seuil de signalement par le fichier de config', () => {
+    const dir = configFile({ rules: { 'redundant-else': true }, reportThresholds: { maxLinesPerFunction: 80 } });
+    const resolved = resolveConfig(loadProjectConfig(dir));
+    expect(resolved.rules['redundant-else']).toBe(true);
+    expect(resolved.rules['passthrough-wrapper']).toBe(false);
+    expect(resolved.reportThresholds).toMatchObject({ maxLinesPerFunction: 80, maxFileLines: 600 });
+    expect(resolved.thresholds.maxLinesPerFunction).toBe(50);
+  });
+
+  it('refuse une règle inconnue, une valeur non booléenne ou un seuil de signalement inconnu', () => {
+    expect(() => loadProjectConfig(configFile({ rules: { 'empty-catch': false } }))).toThrow(/rules\.empty-catch inconnu/);
+    expect(() => loadProjectConfig(configFile({ rules: { 'redundant-else': 'oui' } }))).toThrow(/true ou false/);
+    expect(() => loadProjectConfig(configFile({ reportThresholds: { maxNestedCallbacks: 5 } })))
+      .toThrow(/reportThresholds\.maxNestedCallbacks inconnu/);
+  });
+});
+
 describe('resolveConfig', () => {
   it('fills unspecified fields with defaults', () => {
     const resolved = resolveConfig({});

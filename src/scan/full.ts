@@ -7,7 +7,8 @@
  * les 200 ms.
  */
 import { compareFindings, envelope } from '../core/findings.js';
-import type { ResolvedConfig } from '../core/config.js';
+import { enabledOptionalRules } from '../core/config.js';
+import type { ResolvedConfig, RuleSwitches } from '../core/config.js';
 import type { ReportScope } from '../core/scope.js';
 import type { AggregateKey, Aggregates, DeadCodeReport, ScanReport } from '../core/types.js';
 import type { GitIgnoredResult } from '../churn/git.js';
@@ -50,7 +51,7 @@ export async function scanFull(
   };
 
   if (options.skipChurn !== true) await addChurn(report, fast, config, options);
-  if (options.skipExternalTools !== true) await addExternalTools(rootPath, fast, report);
+  if (options.skipExternalTools !== true) await addExternalTools(rootPath, fast, report, config.rules);
   if (report.deadCode?.available !== true) addOrphans(report, fast, config.scope, ignored);
 
   assertRatiosInRange(report.aggregates);
@@ -91,14 +92,14 @@ async function addChurn(report: ScanReport, fast: FastScan, config: ResolvedConf
 }
 
 /** knip et jscpd complètent le rapport en place : findings, agrégats et verbosité. */
-async function addExternalTools(rootPath: string, fast: FastScan, report: ScanReport): Promise<void> {
+async function addExternalTools(rootPath: string, fast: FastScan, report: ScanReport, rules: RuleSwitches): Promise<void> {
   const [{ analyzeDeadCode }, { analyzeDuplication }] = await Promise.all([
     import('../adapters/knip.js'),
     import('../adapters/jscpd.js'),
   ]);
   const { aggregates, findings } = report;
 
-  const deadCode = withoutNativeDuplicates(rootPath, fast.files, analyzeDeadCode(rootPath, fast.files));
+  const deadCode = withoutNativeDuplicates(rootPath, fast.files, analyzeDeadCode(rootPath, fast.files, rules));
   report.deadCode = deadCode;
   if (deadCode.available) {
     aggregates['deadcode.exports.count'] = deadCode.summary.unusedExports;
@@ -173,6 +174,7 @@ function reportScope(config: ResolvedConfig, ignored: GitIgnoredResult, subproje
     gitignore: ignored.available,
     toolsScoped: true,
     importRules: 2,
+    rules: enabledOptionalRules(config.rules),
     subprojects,
   };
   if (ignored.reason !== undefined) scope.gitignoreUnavailableReason = ignored.reason;

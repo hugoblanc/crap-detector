@@ -8,6 +8,7 @@ import { Project } from 'ts-morph';
 import type { SourceFile } from 'ts-morph';
 import { globToRegExp, matchesAnyGlob } from '../core/glob.js';
 import { compareFindings, envelope, makeFinding } from '../core/findings.js';
+import { isRuleEnabled, reportThresholdOf } from '../core/config.js';
 import type { ResolvedConfig } from '../core/config.js';
 import type {
   FileMetrics,
@@ -172,7 +173,18 @@ export function findingsForFiles(files: FileMetrics[], config: ResolvedConfig): 
       }
     }
   }
-  return findings.sort(compareFindings);
+  return applyRuleConfig(findings, config).sort(compareFindings);
+}
+
+/** Retire les règles désactivées et marque ce qui ne dépasse pas le seuil de signalement. */
+function applyRuleConfig(findings: Finding[], config: ResolvedConfig): Finding[] {
+  return findings
+    .filter((finding) => isRuleEnabled(config.rules, finding.rule))
+    .map((finding) => {
+      const reportAt = reportThresholdOf(config.reportThresholds, finding.rule);
+      const below = reportAt !== undefined && (finding.value ?? 0) <= reportAt;
+      return below ? { ...finding, belowReportThreshold: true } : finding;
+    });
 }
 
 export function analyzeProject(rootPath: string, config: ResolvedConfig): MetricsReport {

@@ -10,6 +10,8 @@
  * Le parsing est séparé de l'exécution : `mapKnipReport` est testable sans knip.
  */
 import { posix } from 'node:path';
+import { isRuleEnabled } from '../core/config.js';
+import type { RuleSwitches } from '../core/config.js';
 import { compareFindings, envelope, makeFinding } from '../core/findings.js';
 import type { DeadCodeReport, DeadCodeSummary, Finding } from '../core/types.js';
 import { parseJsonOutput, runTool } from './run.js';
@@ -47,14 +49,15 @@ export interface KnipMapping {
   outOfScope: number;
 }
 
-function summarize(findings: Finding[]): DeadCodeSummary {
+function summarize(findings: Finding[], rules: RuleSwitches): DeadCodeSummary {
   const count = (rule: string): number => findings.filter((finding) => finding.rule === rule).length;
-  return {
+  const summary: DeadCodeSummary = {
     unusedFiles: count('unused-file'),
     unusedExports: count('unused-export'),
-    unusedTypes: count('unused-type'),
     unusedDependencies: count('unused-dependency'),
   };
+  if (rules['unused-type']) summary.unusedTypes = count('unused-type');
+  return summary;
 }
 
 /**
@@ -81,7 +84,7 @@ function entryFinding(file: string, kind: (typeof ISSUE_KINDS)[number], entry: K
   });
 }
 
-function readFindings(parsed: unknown): Finding[] {
+function readFindings(parsed: unknown, kinds: ReadonlyArray<(typeof ISSUE_KINDS)[number]>): Finding[] {
   const issues = (parsed as { issues?: unknown }).issues;
   if (!Array.isArray(issues)) return [];
   const findings: Finding[] = [];
@@ -95,7 +98,7 @@ function readFindings(parsed: unknown): Finding[] {
         makeFinding({ tool: 'knip', rule: 'unused-file', file, severity: 'major', message: 'fichier jamais importé' }),
       );
     }
-    for (const kind of ISSUE_KINDS) {
+    for (const kind of kinds) {
       findings.push(...entriesOf(issue, kind.key).map((entry) => entryFinding(file, kind, entry)));
     }
   }
@@ -103,13 +106,13 @@ function readFindings(parsed: unknown): Finding[] {
 }
 
 /** `files` : fichiers du périmètre, relatifs à la racine comme les chemins de knip. */
-export function mapKnipReport(parsed: unknown, files: readonly string[]): KnipMapping {
-  const findings = readFindings(parsed);
+export function mapKnipReport(parsed: unknown, files: readonly string[], rules: RuleSwitches): KnipMapping {
+  const findings = readFindings(parsed, ISSUE_KINDS.filter((kind) => isRuleEnabled(rules, kind.rule)));
   const inScope = new Set(files);
   const kept = findings.filter((finding) =>
     inScope.has(finding.file) || isScopeManifest(finding.file, files));
   return {
-    summary: summarize(kept),
+    summary: summarize(kept, rules),
     findings: kept.sort(compareFindings),
     outOfScope: findings.length - kept.length,
   };
@@ -122,7 +125,7 @@ const EMPTY_SUMMARY: DeadCodeSummary = {
   unusedDependencies: 0,
 };
 
-export function analyzeDeadCode(rootPath: string, files: readonly string[]): DeadCodeReport {
+export function analyzeDeadCode(rootPath: string, files: readonly string[], rules: RuleSwitches): DeadCodeReport {
   // knip sort 1 dès qu'il trouve quelque chose : ce n'est pas un échec.
   const result = runTool('knip', 'knip', ['--reporter', 'json', '--no-progress'], rootPath, {
     successExitCodes: [1],
@@ -141,7 +144,7 @@ export function analyzeDeadCode(rootPath: string, files: readonly string[]): Dea
   });
   if (!result.ok) return unavailable(result.reason ?? 'knip indisponible');
   try {
-    return { ...base, ...mapKnipReport(parseJsonOutput(result.stdout), files) };
+    return { ...base, ...mapKnipReport(parseJsonOutput(result.stdout), files, rules) };
   } catch (error) {
     return unavailable(`sortie knip illisible : ${error instanceof Error ? error.message : String(error)}`);
   }

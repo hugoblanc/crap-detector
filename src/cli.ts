@@ -22,10 +22,12 @@ import type { CompareResult, Finding, ScanReport } from './core/types.js';
 import { numberOption, parseArgs } from './cli/args.js';
 import type { ParsedArgs } from './cli/args.js';
 import {
+  hiddenNote,
   renderCompare,
   renderFindings,
   renderHotspots,
   renderSummary,
+  visibleFindings,
 } from './cli/render.js';
 import { scanFile } from './scan/fast.js';
 import { scanFull } from './scan/full.js';
@@ -56,6 +58,7 @@ Options
   --no-tools         saute knip et jscpd
   --top <n>          nombre de hotspots affichés (défaut 10)
   --limit <n>        nombre de findings affichés (défaut 20)
+  --all              affiche aussi les findings sous le seuil de signalement (scan, file, explain)
   --baseline <chemin> emplacement du fichier de baseline
 `;
 
@@ -99,8 +102,9 @@ async function runScan(context: Context): Promise<number> {
   }
   print(renderSummary(report));
   print(['']);
-  print(renderFindings(report.findings, numberOption(context.args, 'limit', 20)));
-  print(['', `${String(report.findings.length)} finding(s) au total`]);
+  const shown = visibleFindings(report.findings, context.args.flags.has('all'));
+  print(renderFindings(shown, numberOption(context.args, 'limit', 20)));
+  print(['', `${String(report.findings.length)} finding(s) au total`, ...hiddenNote(report.findings, shown)]);
   return 0;
 }
 
@@ -112,13 +116,15 @@ function runFile(context: Context): number {
   }
   const relativePath = toRelative(context.rootPath, target);
   const report = scanFile(context.rootPath, relativePath, context.config);
+  // Sous le seuil de signalement, le hook se tait : une fonction de 55 lignes n'interrompt pas l'agent.
+  const shown = visibleFindings(report.findings, context.args.flags.has('all'));
   if (context.json) {
     printJson(report);
-    return report.findings.length > 0 ? 2 : 0;
+    return shown.length > 0 ? 2 : 0;
   }
-  if (report.findings.length === 0) return 0;
+  if (shown.length === 0) return 0;
   // stderr : c'est ce que le hook renvoie à l'agent quand il sort en code 2.
-  process.stderr.write(`${renderFindings(report.findings).join('\n')}\n`);
+  process.stderr.write(`${renderFindings(shown).join('\n')}\n`);
   return 2;
 }
 
@@ -197,10 +203,11 @@ async function runExplain(context: Context): Promise<number> {
     ...scanOptions(context.args),
     skipExternalTools: true,
   });
-  const findings = report.findings.filter((finding) => finding.file === relativePath);
+  const counted = report.findings.filter((finding) => finding.file === relativePath);
+  const findings = visibleFindings(counted, context.args.flags.has('all'));
   const hotspot = report.churn?.hotspots.find((entry) => entry.file === relativePath);
   if (context.json) {
-    printJson({ file: relativePath, findings, hotspot });
+    printJson({ file: relativePath, findings: counted, hotspot });
     return findings.length > 0 ? 1 : 0;
   }
   const metrics = report.metrics.files.find((entry) => entry.file === relativePath);
@@ -217,6 +224,7 @@ async function runExplain(context: Context): Promise<number> {
     '',
   ]);
   print(findings.length === 0 ? ['aucun finding'] : renderFindings(findings));
+  print(hiddenNote(counted, findings));
   return findings.length > 0 ? 1 : 0;
 }
 

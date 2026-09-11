@@ -35,6 +35,19 @@ export function renderFindings(findings: Finding[], limit?: number): string[] {
   return lines;
 }
 
+/** Ce que le texte affiche : au-delà du seuil de signalement, ou tout avec --all. */
+export function visibleFindings(findings: Finding[], all: boolean): Finding[] {
+  return all ? findings : findings.filter((finding) => finding.belowReportThreshold !== true);
+}
+
+/** Un finding masqué reste compté par le cliquet : le dire, sinon « aucun finding » ment. */
+export function hiddenNote(findings: Finding[], shown: Finding[]): string[] {
+  const hidden = findings.length - shown.length;
+  return hidden === 0
+    ? []
+    : [`${String(hidden)} finding(s) sous le seuil de signalement, comptés par le cliquet : --all pour les voir`];
+}
+
 function fraction(value: number | undefined): string {
   return value === undefined ? 'non mesuré' : value.toFixed(3);
 }

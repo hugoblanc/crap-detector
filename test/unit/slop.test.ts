@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Project } from 'ts-morph';
 import type { SourceFile } from 'ts-morph';
+import { resolveConfig } from '../../src/core/config.js';
 import { TYPE_ESCAPE_RULES, VERBOSITY_RULES, slopHits } from '../../src/slop/rules.js';
 import type { SlopHit } from '../../src/slop/rules.js';
 import {
@@ -12,13 +13,17 @@ import {
   verbosityLines,
 } from '../../src/slop/analyze.js';
 
+const ALL_RULES = resolveConfig({
+  rules: { 'redundant-else': true, 'assign-then-return': true, 'boolean-ternary': true, 'passthrough-wrapper': true },
+}).rules;
+
 function parse(code: string, file = 'src/sample.ts'): SourceFile {
   const project = new Project({ useInMemoryFileSystem: true, skipAddingFilesFromTsConfig: true });
   return project.createSourceFile(file, code);
 }
 
 function rulesOf(code: string): string[] {
-  return slopHits(parse(code), 'src/sample.ts').map((entry) => entry.rule);
+  return slopHits(parse(code), 'src/sample.ts', ALL_RULES).map((entry) => entry.rule);
 }
 
 describe('catch masquant l’erreur', () => {
@@ -74,6 +79,26 @@ describe('else redondant', () => {
     expect(rulesOf(code)).toEqual([]);
   });
 
+  it('ne vise pas le else final quand une branche précédente de la chaîne continue (#6)', () => {
+    const code = [
+      'declare function work(): void;',
+      'export function pick(a: boolean, b: boolean): number {',
+      '  if (a) { work(); } else if (b) { return 1; } else { work(); }',
+      '  return 0;',
+      '}',
+    ].join('\n');
+    expect(rulesOf(code)).toEqual([]);
+  });
+
+  it('signale le else final quand toutes les branches de la chaîne sortent', () => {
+    const code = [
+      'export function pick(a: boolean, b: boolean): number {',
+      '  if (a) { return 1; } else if (b) { return 2; } else { return 3; }',
+      '}',
+    ].join('\n');
+    expect(rulesOf(code)).toEqual(['redundant-else']);
+  });
+
   it('ne vise pas un else if', () => {
     const code = [
       'export function pick(n: number): number {',
@@ -94,7 +119,7 @@ describe('assignation puis retour', () => {
       '  return sum;',
       '}',
     ].join('\n');
-    const hits = slopHits(parse(code), 'src/sample.ts');
+    const hits = slopHits(parse(code), 'src/sample.ts', ALL_RULES);
     expect(hits[0]).toMatchObject({
       rule: 'assign-then-return',
       line: 2,
@@ -167,6 +192,54 @@ describe('wrapper transparent', () => {
     const code = ['declare function work(): void;', 'export const run = () => work();'].join('\n');
     expect(rulesOf(code)).toEqual([]);
   });
+
+  it('ne vise pas un callback inline passé à une méthode (#5)', () => {
+    const code = [
+      'declare function save(item: string): void;',
+      'export function run(items: string[]): void {',
+      '  items.forEach((item) => save(item));',
+      '}',
+    ].join('\n');
+    expect(rulesOf(code)).toEqual([]);
+  });
+
+  it('ne vise pas un appel de méthode, qui perdrait sa liaison de this (#5)', () => {
+    const code = [
+      'declare const formatter: { format(value: number): string };',
+      'export const format = (value: number): string => formatter.format(value);',
+      'export class View {',
+      '  render(value: number): string { return this.format(value); }',
+      '  format(value: number): string { return value.toFixed(2); }',
+      '}',
+    ].join('\n');
+    expect(rulesOf(code)).toEqual([]);
+  });
+
+  it('ne vise pas une lambda qui restreint l’arité transmise, ni une garde de type (#5)', () => {
+    const code = [
+      'declare const allowed: string[];',
+      'declare function retry(task: (attempt: number, error: unknown) => void): void;',
+      'declare function connect(attempt: number, timeout?: number): void;',
+      'declare function isText(value: unknown): value is string;',
+      'export const kept = (list: string[]) => list.filter((x) => allowed.includes(x));',
+      'export const run = () => retry((attempt) => connect(attempt));',
+      'export const guard = (value: unknown): value is string => isText(value);',
+    ].join('\n');
+    expect(rulesOf(code)).toEqual([]);
+  });
+});
+
+describe('règles optionnelles', () => {
+  it('ne parcourt pas une règle désactivée par défaut, la mesure une fois activée', () => {
+    const code = [
+      'export function pick(flag: boolean): number {',
+      '  if (flag) { return 1; } else { return 2; }',
+      '}',
+    ].join('\n');
+    expect(slopHits(parse(code), 'src/sample.ts', resolveConfig({}).rules)).toEqual([]);
+    const enabled = resolveConfig({ rules: { 'redundant-else': true } }).rules;
+    expect(slopHits(parse(code), 'src/sample.ts', enabled).map((entry) => entry.rule)).toEqual(['redundant-else']);
+  });
 });
 
 describe('échappements de typage', () => {
@@ -212,7 +285,7 @@ describe('enclosingSymbol', () => {
       '}',
       'try { work(); } catch (error) {}',
     ].join('\n');
-    const hits = slopHits(parse(code), 'src/sample.ts');
+    const hits = slopHits(parse(code), 'src/sample.ts', ALL_RULES);
     expect(hits.map((entry) => entry.symbol)).toEqual(['outer', '#module']);
   });
 
@@ -224,7 +297,7 @@ describe('enclosingSymbol', () => {
       '  inner();',
       '}',
     ].join('\n');
-    expect(slopHits(parse(code), 'src/sample.ts')[0]?.symbol).toBe('inner');
+    expect(slopHits(parse(code), 'src/sample.ts', ALL_RULES)[0]?.symbol).toBe('inner');
   });
 });
 
@@ -256,7 +329,7 @@ describe('slopFindings', () => {
       '}',
       'export function other(c: any): void { void c; }',
     ].join('\n');
-    const findings = slopFindings(slopHits(parse(code), 'src/sample.ts'));
+    const findings = slopFindings(slopHits(parse(code), 'src/sample.ts', ALL_RULES));
     expect(findings).toHaveLength(2);
     const loose = findings.find((finding) => finding.symbol === 'loose');
     expect(loose).toMatchObject({ rule: 'type-escape-any', value: 2, severity: 'major' });
@@ -268,7 +341,7 @@ describe('slopFindings', () => {
       'export function one(a: any): void { void a; }',
       'export function two(a: any): void { void a; }',
     ].join('\n');
-    const findings = slopFindings(slopHits(parse(code), 'src/sample.ts'));
+    const findings = slopFindings(slopHits(parse(code), 'src/sample.ts', ALL_RULES));
     expect(new Set(findings.map((finding) => finding.id)).size).toBe(2);
   });
 });
@@ -328,7 +401,7 @@ describe('analyzeSlop', () => {
       ['src/a.ts', project.createSourceFile('src/a.ts', 'export function f(x: any): any { return x; }\n')],
       ['src/b.ts', project.createSourceFile('src/b.ts', 'export const clean = (n: number): number => n + 1;\n')],
     ]);
-    const { report, hits } = analyzeSlop('/repo', sources);
+    const { report, hits } = analyzeSlop('/repo', sources, ALL_RULES);
     expect(hits).toHaveLength(2);
     expect(report.toolVersion).toBe('ts-morph');
     expect(report.summary.typeEscapes).toBe(2);

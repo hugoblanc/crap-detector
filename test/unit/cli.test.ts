@@ -170,6 +170,48 @@ describe('main', () => {
     return root;
   }
 
+  /** Fonction de `lines` lignes physiques, sans autre violation. */
+  function longFunction(name: string, lines: number): string {
+    const body = Array.from({ length: lines - 3 }, (_, index) => `  void ${String(index)};`);
+    return [`export function ${name}(): number {`, ...body, '  return 0;', '}', ''].join('\n');
+  }
+
+  it('compte une fonction de 60 lignes sans l’afficher par défaut, l’affiche avec --all', async () => {
+    const root = fixture();
+    writeFileSync(join(root, 'src/long.ts'), longFunction('long', 60), 'utf8');
+    const options = ['--root', root, '--no-git', '--no-tools'];
+
+    expect(await main(['scan', ...options])).toBe(0);
+    expect(out.join('')).not.toContain('function-length');
+    expect(out.join('')).toContain('1 finding(s) sous le seuil de signalement, comptés par le cliquet : --all');
+    out = [];
+    await main(['scan', ...options, '--all']);
+    expect(out.join('')).toContain('[function-length] long : lignes 60 > 50');
+    out = [];
+    await main(['scan', ...options, '--json']);
+    const report = JSON.parse(out.join('')) as { findings: Array<{ rule: string }> };
+    expect(report.findings.find((finding) => finding.rule === 'function-length'))
+      .toMatchObject({ value: 60, belowReportThreshold: true });
+    out = [];
+    await main(['explain', join(root, 'src/long.ts'), ...options]);
+    expect(out.join('')).not.toContain('function-length');
+    expect(out.join('')).toContain('1 finding(s) sous le seuil de signalement');
+    out = [];
+    await main(['baseline', ...options, '--baseline', join(root, 'baseline.json'), '--json']);
+    const baseline = JSON.parse(out.join('')) as { debtMaxima: Record<string, number> };
+    expect(baseline.debtMaxima['metrics|function-length|src/long.ts']).toBe(60);
+  });
+
+  it('laisse le hook file silencieux sous le seuil de signalement, pas au-dessus', async () => {
+    const root = fixture();
+    writeFileSync(join(root, 'src/long.ts'), longFunction('long', 60), 'utf8');
+    writeFileSync(join(root, 'src/huge.ts'), longFunction('huge', 120), 'utf8');
+    expect(await main(['file', join(root, 'src/long.ts'), '--root', root])).toBe(0);
+    expect(err.join('')).toBe('');
+    expect(await main(['file', join(root, 'src/huge.ts'), '--root', root])).toBe(2);
+    expect(err.join('')).toContain('[function-length] huge : lignes 120 > 50');
+  });
+
   it('affiche l’aide et sort en erreur d’usage sans commande', async () => {
     expect(await main([])).toBe(3);
     expect(out.join('')).toContain('crap-detector scan');

@@ -218,16 +218,25 @@ describe('findingsForFiles', () => {
         ],
       }),
     ];
-    const rules = findingsForFiles(files, config).map((finding) => finding.rule).sort();
-    expect(rules).toEqual([
+    const rules = (active: ResolvedConfig): string[] =>
+      findingsForFiles(files, active).map((finding) => finding.rule).sort();
+    expect(rules(config)).toEqual([
       'cognitive-complexity',
       'cyclomatic-complexity',
       'file-length',
       'function-length',
-      'nested-callbacks',
       'nesting-depth',
       'too-many-params',
     ]);
+    expect(rules(resolveConfig({ rules: { 'nested-callbacks': true } }))).toContain('nested-callbacks');
+  });
+
+  it('marque ce qui dépasse le seuil du cliquet sans dépasser celui de signalement', () => {
+    const files = [
+      file({ functions: [fn({ symbol: 'long', sloc: 60 }), fn({ symbol: 'huge', line: 2, sloc: 120 })] }),
+    ];
+    const marks = findingsForFiles(files, config).map((finding) => [finding.symbol, finding.belowReportThreshold]);
+    expect(marks.sort()).toEqual([['huge', undefined], ['long', true]]);
   });
 
   it('porte tool, file, symbol, ligne, valeur et seuil sur un finding de complexité', () => {

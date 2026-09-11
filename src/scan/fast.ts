@@ -75,7 +75,7 @@ export function scanFast(rootPath: string, config: ResolvedConfig, ignored?: Ign
     findings: findingsForFiles(fileMetrics, config),
   };
 
-  const slopAnalysis = analyzeSlop(rootPath, sourceFiles);
+  const slopAnalysis = analyzeSlop(rootPath, sourceFiles, config.rules);
   const slop = slopAnalysis.report;
   const importAnalysis = analyzeImports(rootPath, sourceFiles);
   const dependencies = analyzeGraph(rootPath, importAnalysis.graph);
@@ -129,7 +129,7 @@ export function scanFile(
 
   const findings: Finding[] = [
     ...findingsForFiles([metrics], config),
-    ...slopFindings(slopHits(sourceFile, relativePath)),
+    ...slopFindings(slopHits(sourceFile, relativePath, config.rules)),
   ];
 
   const context = dependencyContext(rootPath, new Map([[relativePath, sourceFile]]));
