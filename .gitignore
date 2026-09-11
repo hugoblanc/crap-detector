@@ -5,3 +5,4 @@ coverage/
 *.log
 jscpd-report.*
 mutants.out*/
+.claude/worktrees/

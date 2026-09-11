@@ -230,6 +230,13 @@ describe('incompatibilityReason', () => {
       .toMatch(/hors du périmètre : refaire la baseline/);
   });
 
+  it('accepte sans ce champ une baseline écrite sans knip ni jscpd', () => {
+    const withoutTools = makeBaseline(report());
+    const { include, exclude, gitignore } = withoutTools.scope;
+    const legacy = { ...withoutTools, scope: { include, exclude, gitignore } } as unknown as Baseline;
+    expect(incompatibilityReason(legacy, report({ withKnip: true }))).toBeUndefined();
+  });
+
   it('dit pourquoi un scan n’a pas pu appliquer le filtrage de la baseline', () => {
     const withoutGit = report({ withKnip: true, gitignore: false });
     withoutGit.scope.gitignoreUnavailableReason = 'fatal: not a git repository';

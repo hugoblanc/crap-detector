@@ -11,6 +11,7 @@
  * dire non mesurée, jamais zéro.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
+import { scopeIncompatibility } from '../core/scope.js';
 import { appVersion } from '../core/version.js';
 import { AGGREGATE_KEYS } from '../core/types.js';
 import type {
@@ -153,33 +154,6 @@ export function makeBaseline(report: ScanReport): Baseline {
   };
 }
 
-function sameList(a: string[], b: string[]): boolean {
-  return a.length === b.length && a.every((value, index) => value === b[index]);
-}
-
-/**
- * Mêmes globs, même filtrage git et outils restreints au périmètre, sinon les deux scans n'ont pas lu les mêmes fichiers.
- * Sans champ `gitignore`, la baseline date d'avant ce filtrage et comptait `.next/`.
- * Sans `toolsScoped`, sa dette knip hors périmètre disparaîtrait en passant pour corrigée.
- */
-function scopeIncompatibility(
-  baseline: Baseline['scope'],
-  current: ScanReport['scope'],
-): string | undefined {
-  if (!sameList(baseline.include, current.include) || !sameList(baseline.exclude, current.exclude)) {
-    return 'périmètre d\'analyse modifié : refaire la baseline';
-  }
-  if (baseline.toolsScoped !== true) {
-    return 'la baseline compte la duplication et le code mort hors du périmètre : refaire la baseline';
-  }
-  if (baseline.gitignore === current.gitignore) return undefined;
-  if (baseline.gitignore === true) {
-    return 'la baseline excluait les fichiers ignorés par git, ce scan n\'a pas pu les exclure : '
-      + (current.gitignoreUnavailableReason ?? 'git indisponible');
-  }
-  return 'la baseline a été écrite sans exclure les fichiers ignorés par git : refaire la baseline';
-}
-
 /**
  * Une baseline n'est comparable que si les seuils, le périmètre et les versions
  * d'outils sont identiques. Comparer à travers un changement de seuil ferait
@@ -196,7 +170,7 @@ export function incompatibilityReason(baseline: Baseline, report: ScanReport): s
       return `seuil ${key} modifié (${String(previous)} → ${String(value)}) : refaire la baseline`;
     }
   }
-  const scopeReason = scopeIncompatibility(baseline.scope, report.scope);
+  const scopeReason = scopeIncompatibility(baseline, report.scope);
   if (scopeReason !== undefined) return scopeReason;
   const current = toolVersionsOf(report);
   for (const [tool, version] of Object.entries(baseline.toolVersions)) {

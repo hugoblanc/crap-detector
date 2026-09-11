@@ -69,13 +69,16 @@ export function renderSummary(report: ScanReport): string[] {
   return lines;
 }
 
-/** Ce que les outils externes ont trouvé hors du périmètre et qui n'est pas compté. */
+/** Ce que les outils externes ont trouvé hors du périmètre, pour ceux qui ont tourné. */
 function outOfScopeLine(report: ScanReport): string[] {
-  if (report.deadCode === undefined && report.duplication === undefined) return [];
-  return [
-    `écartés     ${count(report.deadCode?.outOfScope)} findings knip, `
-      + `${count(report.duplication?.outOfScope)} clones jscpd, hors périmètre`,
-  ];
+  const parts: string[] = [];
+  if (report.deadCode?.available === true) {
+    parts.push(`${String(report.deadCode.outOfScope)} findings knip`);
+  }
+  if (report.duplication?.available === true) {
+    parts.push(`${String(report.duplication.outOfScope)} clones jscpd`);
+  }
+  return parts.length === 0 ? [] : [`écartés     ${parts.join(', ')}, hors périmètre`];
 }
 
 function unavailableNote(

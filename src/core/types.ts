@@ -3,6 +3,7 @@
  * Aucune logique ici : uniquement des types.
  */
 import type { ThresholdsSnapshot } from './config.js';
+import type { BaselineScope, ReportScope } from './scope.js';
 
 export type Severity = 'info' | 'minor' | 'major' | 'critical';
 
@@ -281,19 +282,6 @@ export type Aggregates = Partial<Record<AggregateKey, number>>;
 export interface BaselineGenerator {
   name: string;
   version: string;
-}
-
-export interface BaselineScope {
-  include: string[];
-  exclude: string[];
-  /** true = fichiers ignorés par git retirés du périmètre ; absent des baselines antérieures. */
-  gitignore: boolean;
-  /** knip et jscpd restreints au périmètre ; absent des baselines qui les comptaient hors périmètre. */
-  toolsScoped: true;
-}
-
-export interface ReportScope extends BaselineScope {
-  gitignoreUnavailableReason?: string;
 }
 
 /** Entrées ignorées par git, relatives à rootPath ; un dossier listé l'est en entier. */

@@ -14,10 +14,38 @@ export function functionSloc(fn: FunctionLikeNode): number {
 
 /** Lignes non vides du fichier (définition SLOC retenue pour le projet). */
 export function fileSloc(sourceFile: SourceFile): number {
-  return sourceFile
-    .getFullText()
-    .split('\n')
-    .filter((line) => line.trim() !== '').length;
+  return slocLines(sourceFile).size;
+}
+
+/** Numéros, à partir de 1, des lignes que compte fileSloc. */
+function slocLines(sourceFile: SourceFile): Set<number> {
+  const lines = new Set<number>();
+  sourceFile.getFullText().split('\n').forEach((line, index) => {
+    if (line.trim() !== '') lines.add(index + 1);
+  });
+  return lines;
+}
+
+/**
+ * Ne garde, par fichier, que les lignes comptées dans le SLOC. Une plage de clone couvre
+ * aussi des lignes blanches : sans ce filtre, la verbosité diviserait des lignes brutes par du SLOC.
+ */
+export function keepSlocLines(
+  byFile: Map<string, Set<number>>,
+  sourceFiles: Map<string, SourceFile>,
+): Map<string, Set<number>> {
+  const kept = new Map<string, Set<number>>();
+  for (const [file, lines] of byFile) {
+    const source = sourceFiles.get(file);
+    if (source === undefined) continue;
+    const sloc = slocLines(source);
+    const code = new Set<number>();
+    for (const line of lines) {
+      if (sloc.has(line)) code.add(line);
+    }
+    kept.set(file, code);
+  }
+  return kept;
 }
 
 /**

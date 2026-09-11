@@ -154,6 +154,10 @@ describe('mapKnipReport', () => {
     expect(mapping.findings.filter((finding) => finding.file.includes('copie'))).toEqual([]);
   });
 
+  it('ne garde aucun finding, pas même de dépendance, sur un périmètre vide', () => {
+    expect(mapKnipReport(report, []).findings).toEqual([]);
+  });
+
   it('garde un id stable quand la ligne change', () => {
     const before = mapKnipReport(report, scope).findings
       .find((finding) => finding.symbol === 'unusedHelper');
@@ -290,6 +294,24 @@ describe('analyzeDuplication sur un vrai projet', () => {
     expect(report.available).toBe(true);
     expect(report.statistics).toEqual({ clones: 0, duplicatedLines: 0, percent: 0 });
     expect(cloneLines.size).toBe(0);
+  }, 120_000);
+
+  it('reprend la config jscpd du dépôt : .jscpd.json, ou à défaut la clé jscpd du package.json', () => {
+    const sources = {
+      'src/a.ts': `${block}\n`,
+      'src/b.ts': `${block.replace('compute', 'computeAgain')}\n`,
+    };
+    const ignoreB = { ignore: ['**/src/b.ts'] };
+    const configs: Array<Record<string, string>> = [
+      { '.jscpd.json': JSON.stringify(ignoreB) },
+      { 'package.json': JSON.stringify({ name: 'fixture', jscpd: ignoreB }) },
+    ];
+    for (const config of configs) {
+      const { report } = analyzeDuplication(makeRoot({ ...sources, ...config }), ['src/a.ts', 'src/b.ts']);
+      const label = Object.keys(config).join();
+      expect(report.available, label).toBe(true);
+      expect(report.statistics.clones, label).toBe(0);
+    }
   }, 120_000);
 
   it('ne lance pas jscpd sur un périmètre vide, qui lui ferait lire toute la racine', () => {

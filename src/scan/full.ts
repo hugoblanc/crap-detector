@@ -8,9 +8,13 @@
  */
 import { compareFindings, envelope } from '../core/findings.js';
 import type { ResolvedConfig } from '../core/config.js';
-import type { AggregateKey, Aggregates, Finding, ReportScope, ScanReport } from '../core/types.js';
+import type { ReportScope } from '../core/scope.js';
+import type { AggregateKey, Aggregates, Finding, ScanReport } from '../core/types.js';
 import type { GitIgnoredResult } from '../churn/git.js';
+import { keepSlocLines } from '../metrics/sizes.js';
+import { summarizeSlop } from '../slop/analyze.js';
 import { scanFast } from './fast.js';
+import type { FastScan } from './fast.js';
 
 export interface ScanOptions {
   /** Plage de révisions pour le churn ; sinon la fenêtre en jours de la config. */
@@ -77,44 +81,46 @@ export async function scanFull(
     }
   }
 
-  if (options.skipExternalTools !== true) {
-    const [{ analyzeDeadCode }, { analyzeDuplication }] = await Promise.all([
-      import('../adapters/knip.js'),
-      import('../adapters/jscpd.js'),
-    ]);
-
-    const deadCode = analyzeDeadCode(rootPath, fast.files);
-    report.deadCode = deadCode;
-    if (deadCode.available) {
-      aggregates['deadcode.exports.count'] = deadCode.summary.unusedExports;
-      aggregates['deadcode.files.count'] = deadCode.summary.unusedFiles;
-      findings.push(...deadCode.findings);
-    }
-
-    const duplication = analyzeDuplication(rootPath, fast.files);
-    report.duplication = duplication.report;
-    if (duplication.report.available) {
-      aggregates['duplication.percent'] = duplication.report.statistics.percent;
-      aggregates['duplication.lines'] = duplication.report.statistics.duplicatedLines;
-      findings.push(...duplication.report.findings);
-      // Les lignes clonées entrent dans la verbosité : le score AST seul la sous-estime.
-      const { summarizeSlop } = await import('../slop/analyze.js');
-      const summary = summarizeSlop(fast.slopHits, fast.metrics.summary.totalSloc, {
-        cloneLines: duplication.cloneLines,
-      });
-      report.slop = { ...fast.slop, summary };
-      aggregates['verbosity.fraction'] = summary.verbosityFraction;
-      aggregates['verbosity.lines'] = summary.verboseLines;
-    }
-  }
+  if (options.skipExternalTools !== true) await addExternalTools(rootPath, fast, report);
 
   assertRatiosInRange(aggregates);
   report.findings = findings.sort(compareFindings);
   return report;
 }
 
+/** knip et jscpd complètent le rapport en place : findings, agrégats et verbosité. */
+async function addExternalTools(rootPath: string, fast: FastScan, report: ScanReport): Promise<void> {
+  const [{ analyzeDeadCode }, { analyzeDuplication }] = await Promise.all([
+    import('../adapters/knip.js'),
+    import('../adapters/jscpd.js'),
+  ]);
+  const { aggregates, findings } = report;
+
+  const deadCode = analyzeDeadCode(rootPath, fast.files);
+  report.deadCode = deadCode;
+  if (deadCode.available) {
+    aggregates['deadcode.exports.count'] = deadCode.summary.unusedExports;
+    aggregates['deadcode.files.count'] = deadCode.summary.unusedFiles;
+    findings.push(...deadCode.findings);
+  }
+
+  const duplication = analyzeDuplication(rootPath, fast.files);
+  report.duplication = duplication.report;
+  if (!duplication.report.available) return;
+  aggregates['duplication.percent'] = duplication.report.statistics.percent;
+  aggregates['duplication.lines'] = duplication.report.statistics.duplicatedLines;
+  findings.push(...duplication.report.findings);
+  // Les lignes clonées entrent dans la verbosité : le score AST seul la sous-estime.
+  const summary = summarizeSlop(fast.slopHits, fast.metrics.summary.totalSloc, {
+    cloneLines: keepSlocLines(duplication.cloneLines, fast.sourceFiles),
+  });
+  report.slop = { ...fast.slop, summary };
+  aggregates['verbosity.fraction'] = summary.verbosityFraction;
+  aggregates['verbosity.lines'] = summary.verboseLines;
+}
+
+/** La masse érodée est incluse dans la masse totale : erosion.fraction ne peut pas dépasser 1. */
 const RATIO_BOUNDS: ReadonlyArray<readonly [AggregateKey, number]> = [
-  ['erosion.fraction', 1],
   ['verbosity.fraction', 1],
   ['duplication.percent', 100],
 ];

@@ -64,7 +64,7 @@ function summarize(findings: Finding[]): DeadCodeSummary {
 function isScopeManifest(file: string, files: readonly string[]): boolean {
   if (posix.basename(file) !== 'package.json') return false;
   const dir = posix.dirname(file);
-  return dir === '.' || files.some((scoped) => scoped.startsWith(`${dir}/`));
+  return files.some((scoped) => dir === '.' || scoped.startsWith(`${dir}/`));
 }
 
 function entryFinding(file: string, kind: (typeof ISSUE_KINDS)[number], entry: KnipEntry): Finding {

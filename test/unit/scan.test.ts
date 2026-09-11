@@ -211,21 +211,45 @@ describe('scanFull', () => {
     expect(report.deadCode?.outOfScope).toBeGreaterThan(0);
     expect(renderSummary(report).join('\n'))
       .toContain(`écartés     ${String(report.deadCode?.outOfScope)} findings knip, 0 clones jscpd`);
+    if (report.deadCode !== undefined) report.deadCode.available = false;
+    expect(renderSummary(report).join('\n')).not.toContain('findings knip');
+  }, 180_000);
+
+  it('garde la verbosité sous 1 quand les clones couvrent des lignes blanches', async () => {
+    const documented = Array.from({ length: 42 }, (_, i) => [
+      '/**',
+      ` * Ajuste la valeur autour du pivot ${String(i)}.`,
+      ' *',
+      ' * @param value valeur à ajuster',
+      ' */',
+      `export function adjust${String(i)}(value: number): number {`,
+      `  if (value > ${String(i)}) { return value - ${String(i)} * 2 + (value % 3); }`,
+      `  return value + ${String(i)} * 3 - (value % 5);`,
+      '}',
+      '',
+    ].join('\n')).join('\n');
+    const root = makeRoot({
+      'package.json': PROJECT['package.json'],
+      'src/a.ts': documented,
+      'src/b.ts': documented,
+    });
+    const report = await scanFull(root, config, { skipChurn: true });
+    expect(report.duplication?.statistics.clones).toBeGreaterThanOrEqual(1);
+    expect(report.aggregates['verbosity.fraction']).toBeGreaterThan(0.9);
+    expect(report.aggregates['verbosity.fraction']).toBeLessThanOrEqual(1);
   }, 180_000);
 });
 
 describe('assertRatiosInRange', () => {
   it('fait échouer un ratio impossible en nommant l’agrégat', () => {
     expect(() => assertRatiosInRange({ 'verbosity.fraction': 11.67 })).toThrow(/verbosity\.fraction vaut 11\.67/);
-    expect(() => assertRatiosInRange({ 'erosion.fraction': 1.2 })).toThrow(/erosion\.fraction/);
     expect(() => assertRatiosInRange({ 'duplication.percent': 100.5 })).toThrow(/duplication\.percent/);
   });
 
   it('laisse passer les ratios à leur borne et les grandeurs absolues', () => {
     expect(() => assertRatiosInRange({
-      'erosion.fraction': 1,
-      'verbosity.fraction': 0.4,
-      'duplication.percent': 80,
+      'verbosity.fraction': 1,
+      'duplication.percent': 100,
       'verbosity.lines': 187_000,
       'duplication.lines': 1_860_000,
     })).not.toThrow();
