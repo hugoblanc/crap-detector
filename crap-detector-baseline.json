@@ -9,7 +9,7 @@
     "knip": "6.32.2",
     "jscpd": "5.0.16"
   },
-  "createdAt": "2026-09-11T10:05:49.030Z",
+  "createdAt": "2026-09-11T10:34:54.319Z",
   "thresholds": {
     "cyclomaticComplexity": 10,
     "cognitiveComplexity": 15,
@@ -44,13 +44,14 @@
     ],
     "gitignore": true,
     "toolsScoped": true,
-    "importRules": 2
+    "importRules": 2,
+    "rules": []
   },
   "aggregates": {
-    "erosion.fraction": 0.277197,
-    "erosion.mass": 1179.557811,
-    "verbosity.fraction": 0.00083,
-    "verbosity.lines": 4,
+    "erosion.fraction": 0.255987,
+    "erosion.mass": 1104.952181,
+    "verbosity.fraction": 0,
+    "verbosity.lines": 0,
     "duplication.percent": 0,
     "duplication.lines": 0,
     "deadcode.exports.count": 6,
@@ -68,16 +69,7 @@
     "knip|unused-export|src/churn/git.ts": 1,
     "knip|unused-export|src/imports/analyze.ts": 1,
     "knip|unused-export|src/imports/extract.ts": 1,
-    "knip|unused-export|src/slop/rules.ts": 1,
-    "knip|unused-type|src/adapters/jscpd.ts": 2,
-    "knip|unused-type|src/churn/git.ts": 1,
-    "knip|unused-type|src/core/types.ts": 4,
-    "knip|unused-type|src/imports/extract.ts": 1,
-    "knip|unused-type|src/imports/manifest.ts": 1,
-    "metrics|passthrough-wrapper|src/imports/extract.ts": 1,
-    "metrics|passthrough-wrapper|src/imports/graph.ts": 1,
-    "metrics|passthrough-wrapper|src/metrics/analyze.ts": 1,
-    "metrics|passthrough-wrapper|src/metrics/cognitive.ts": 1
+    "knip|unused-export|src/slop/rules.ts": 1
   },
   "debtMaxima": {
     "metrics|cognitive-complexity|src/baseline/baseline.ts": 18,
@@ -95,7 +87,6 @@
     "metrics|cyclomatic-complexity|src/churn/coupling.ts": 15,
     "metrics|cyclomatic-complexity|src/churn/git.ts": 18,
     "metrics|cyclomatic-complexity|src/cli.ts": 20,
-    "metrics|cyclomatic-complexity|src/core/config.ts": 11,
     "metrics|cyclomatic-complexity|src/imports/graph.ts": 12,
     "metrics|cyclomatic-complexity|src/imports/manifest.ts": 17,
     "metrics|cyclomatic-complexity|src/metrics/cognitive.ts": 23,
@@ -103,7 +94,7 @@
     "metrics|cyclomatic-complexity|src/metrics/sizes.ts": 17,
     "metrics|cyclomatic-complexity|src/slop/rules.ts": 12,
     "metrics|file-length|src/baseline/baseline.ts": 380,
-    "metrics|file-length|src/core/types.ts": 350,
+    "metrics|file-length|src/core/types.ts": 328,
     "metrics|function-length|src/baseline/baseline.ts": 71,
     "metrics|function-length|src/churn/coupling.ts": 56,
     "metrics|function-length|src/metrics/analyze.ts": 53,
