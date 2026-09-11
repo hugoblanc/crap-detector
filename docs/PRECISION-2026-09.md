@@ -12,12 +12,15 @@ Les dépôts mesurés sont confidentiels : leur nom, leurs fichiers et leur code
 - Vrai-inutile : l'alerte est exacte, mais agir n'apporterait rien.
 - Faux : l'alerte ne correspond pas au code, ou sa suggestion en changerait le comportement.
 - Incertain : le code seul ne permet pas de trancher.
-- Dans le tableau, « exactes » compte les deux verdicts vrais, « utiles » le seul verdict vrai-utile.
+- Dans les tableaux, « exactes » compte les deux verdicts vrais, « utiles » le seul verdict vrai-utile.
+- Le verdict incertain est exclu du dénominateur des pourcentages ; aucune alerte n'a été classée incertaine (0 sur 699).
 
 ## Résultats
 
-699 alertes vérifiées.
+699 alertes vérifiées, sur 25 règles, dont 80 fausses.
 Globalement, 89 % sont exactes, mais 30 % seulement sont utiles.
+
+Dix-sept règles pèsent 495 alertes et 17 faux :
 
 | Règle | Exactes | Utiles |
 | --- | --- | --- |
@@ -38,6 +41,21 @@ Globalement, 89 % sont exactes, mais 30 % seulement sont utiles.
 | type-escape-any | 100 % | 38 % |
 | cognitive-complexity | 100 % | 42 % |
 | duplicate-block | 100 % | 52 % |
+
+Les huit autres, de dépendances, de graphe, de couplage et de fichiers ou exports morts, pèsent 204 alertes et 63 des 80 faux :
+
+| Règle | Outil | Alertes | Exactes | Utiles | Faux | Traitement |
+| --- | --- | --- | --- | --- | --- | --- |
+| unused-file | knip | 32 | 41 % | 41 % | 19 | issue #9 (knip sans point d'entrée) ; README sur `knip.json` (itération 2) |
+| unlisted-dependency | knip | 11 | 27 % | 27 % | 8 | itération 2 (#3) : imports de types seuls avec `@types`, dédoublonnage |
+| unknown-dependency | règle native | 16 | 62 % | 62 % | 6 | itération 2 (#3) : jugement contre le `package.json` le plus proche |
+| unused-dependency | knip | 33 | 67 % | 67 % | 11 | issue #9 |
+| orphan | règle native | 31 | 68 % | 48 % | 10 | itération 2 (#2) : plus de finding quand knip a tourné |
+| hidden-coupling | git | 24 | 83 % | 33 % | 4 | issue #8 (en cours) |
+| unused-export | knip | 40 | 88 % | 25 % | 5 | inchangée |
+| cycle | graphe | 17 | 100 % | 18 % | 0 | issue #7 (en cours) |
+
+Pour les lignes corrigées par l'itération 2 ou par un travail en cours, ces chiffres sont ceux d'avant correctif : une nouvelle mesure suivra.
 
 Ce que les verdicts disent des règles les moins utiles :
 
@@ -63,7 +81,7 @@ Pour les règles de taille et de complexité, la valeur médiane des alertes uti
 - Les échantillons sont petits, de 8 à 17 alertes utiles par règle de taille ou de complexité : les médianes donnent une tendance, pas une mesure fine.
 - L'échantillon est plafonné par règle et par dépôt : une règle très bavarde sur un dépôt n'y pèse pas plus qu'une règle rare.
 - Utile ou inutile est un jugement sur le code, pas une propriété vérifiable par un outil.
-- La mesure précède les correctifs de #5 et #6 : la précision de passthrough-wrapper et de redundant-else corrigées n'est pas remesurée.
+- La mesure précède les correctifs de #5 et #6, ceux de l'itération 2 et les travaux en cours sur #7 et #8 : les règles corrigées ne sont pas remesurées, une nouvelle mesure suivra.
 - Les seuils de signalement retenus ne sont pas revalidés sur un nouvel échantillon.
 
 ## Décisions
@@ -102,3 +120,4 @@ Le hook `file` ne signale que ce qui dépasse le seuil de signalement, pour ne p
 ### Pas traité dans cette itération
 
 Les règles de catch, d'échappement de typage et de duplication restent actives et affichées telles quelles, avec 18 % à 52 % d'alertes utiles.
+Les huit règles du second tableau suivent le traitement qui y est indiqué.
