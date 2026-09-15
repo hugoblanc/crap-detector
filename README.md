@@ -112,6 +112,8 @@ Quand knip a tourné, ses `unlisted-dependency` sur les fichiers que cette règl
 connexes, Tarjan itératif).
 Un cycle ne compte que s'il existe à l'exécution : les imports effacés à l'émission (`import type`, symboles utilisés seulement comme types) et les `import()` dynamiques n'en créent pas.
 Ce qui s'efface dépend des options effectives du tsconfig le plus proche, chaîne `extends` suivie : avec `verbatimModuleSyntax` seul `import type` disparaît, et avec `emitDecoratorMetadata` le type d'un paramètre de constructeur décoré reste importé (`design:paramtypes`), donc deux services NestJS qui s'injectent mutuellement forment bien un cycle.
+Réserve connue sur ce dernier cas : chaque fichier est émis isolément, sans résolution des symboles entre fichiers, donc un paramètre décoré typé par une interface est traité comme une classe et compte comme cycle, alors que le compilateur émettrait `design:paramtypes` à `Object` et effacerait l'import.
+Le motif ports et adaptateurs, où l'on injecte une interface plutôt qu'une classe, sort donc en faux positif.
 Les orphelins ne sont comptés que si knip n'a pas tourné (`--no-tools`, ou knip absent) : `unused-file` couvre le même besoin, et knip connaît les points d'entrée par convention, comme les pages Next.js, que le graphe ne voit pas.
 Les tests restent hors mesure mais comptent alors comme importeurs : un module utilisé seulement par ses tests n'est pas orphelin.
 
