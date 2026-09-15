@@ -6,6 +6,7 @@ import { findPackageDir, parseJsonOutput, resolveTool, runTool } from '../../src
 import { analyzeDeadCode, mapKnipReport } from '../../src/adapters/knip.js';
 import { analyzeDuplication, mapJscpdReport } from '../../src/adapters/jscpd.js';
 import { judgeKnipReport } from '../../src/adapters/knip-reliability.js';
+import { declaredEntries, isBinaryOnlyPackage } from '../../src/adapters/knip-entries.js';
 import { resolveConfig } from '../../src/core/config.js';
 import { makeFinding } from '../../src/core/findings.js';
 
@@ -178,10 +179,93 @@ describe('mapKnipReport', () => {
     expect(moved?.id).toBe(before?.id);
   });
 
+  it('sépare le symbole mort de l’export superflu, et ne rend le second que si la règle est active', () => {
+    const exported = { issues: [{ file: 'src/a.ts', exports: [{ name: 'TABLE', line: 3 }, { name: 'mort', line: 9 }] }] };
+    const usedInOwnFile = (_file: string, symbol: string): boolean => symbol === 'TABLE';
+    const parDéfaut = mapKnipReport(exported, ['src/a.ts'], withTypes, { usedInOwnFile });
+    expect(parDéfaut.findings.map((finding) => [finding.rule, finding.symbol, finding.severity]))
+      .toEqual([['unused-export', 'mort', 'major']]);
+    expect(parDéfaut.summary.unusedExports).toBe(1);
+    expect(parDéfaut.findings[0]?.message).toContain('symbole mort, supprimable');
+
+    const activée = resolveConfig({ rules: { 'superfluous-export': true } }).rules;
+    const complet = mapKnipReport(exported, ['src/a.ts'], activée, { usedInOwnFile });
+    expect(complet.findings.map((finding) => [finding.rule, finding.symbol, finding.severity]))
+      .toEqual([['unused-export', 'mort', 'major'], ['superfluous-export', 'TABLE', 'minor']]);
+    expect(complet.findings[1]?.message).toContain('l\'export peut être retiré');
+    // Le compteur du cliquet ne suit que le vrai code mort.
+    expect(complet.summary.unusedExports).toBe(1);
+  });
+
   it('tolère une sortie vide ou malformée', () => {
     expect(mapKnipReport({}, scope, withTypes).findings).toEqual([]);
     expect(mapKnipReport({ issues: 'pas un tableau' }, scope, withTypes).findings).toEqual([]);
     expect(mapKnipReport({ issues: [{ exports: [{ name: 'x' }] }] }, scope, withTypes).findings).toEqual([]);
+  });
+});
+
+describe('déclaration des points d’entrée', () => {
+  it('déclare la cible d’un script npm, les dossiers de scripts et les specs d’une seconde config jest', () => {
+    const root = makeRoot({
+      'package.json': JSON.stringify({
+        name: 'app',
+        scripts: {
+          dev: 'tsx ./src/server.ts',
+          'test:e2e': 'jest --config ./test/jest-e2e.json --forceExit',
+          build: 'node dist/main.js',
+        },
+      }),
+      'src/server.ts': '',
+      'scripts/seed.ts': '',
+      'test/jest-e2e.json': JSON.stringify({ rootDir: '../src', testRegex: '.e2e-spec.ts$' }),
+    });
+    const entries = declaredEntries(root, ['src/server.ts', 'src/a.e2e-spec.ts', 'src/a.ts', 'scripts/seed.ts']);
+    expect(entries.configFile).toBeUndefined();
+    expect(entries.patterns).toContain('src/server.ts');
+    expect(entries.patterns).toContain('src/a.e2e-spec.ts');
+    expect(entries.patterns).toContain(`scripts/**/*.{js,mjs,cjs,jsx,ts,tsx,mts,cts}`);
+    // Ni la cible compilée d'un script, ni un fichier du périmètre sans point d'entrée.
+    expect(entries.patterns).not.toContain('dist/main.js');
+    expect(entries.patterns).not.toContain('src/a.ts');
+    expect(entries.added).toBe(3);
+  });
+
+  it('suit la cible lancée par nodemon, seulement si un script npm lance nodemon', () => {
+    const files = { 'nodemon.json': JSON.stringify({ exec: 'node -r ts-node/register server/index.ts' }), 'server/index.ts': '' };
+    const lancé = makeRoot({ ...files, 'package.json': JSON.stringify({ scripts: { 'start:dev': 'nodemon' } }) });
+    expect(declaredEntries(lancé, ['server/index.ts']).patterns).toContain('server/index.ts');
+    const inerte = makeRoot({ ...files, 'package.json': JSON.stringify({ scripts: { start: 'node dist/main.js' } }) });
+    expect(declaredEntries(inerte, ['server/index.ts']).added).toBe(0);
+  });
+
+  it('ne déclare rien quand le dépôt configure knip lui-même', () => {
+    const root = makeRoot({
+      'package.json': JSON.stringify({ name: 'app', scripts: { dev: 'tsx src/server.ts' } }),
+      'src/server.ts': '',
+      'knip.json': JSON.stringify({ entry: ['src/server.ts'] }),
+    });
+    expect(declaredEntries(root, ['src/server.ts'])).toEqual({ patterns: [], added: 0, configFile: 'knip.json' });
+  });
+
+  it('reconnaît un paquet qui n’expose qu’un binaire', () => {
+    const root = makeRoot({
+      'node_modules/cli-pur/package.json': JSON.stringify({ name: 'cli-pur', bin: { 'cli-pur': './run.js' } }),
+      'node_modules/outil/package.json': JSON.stringify({ name: 'outil', bin: './run.js', main: './index.js' }),
+      'apps/web/package.json': '{}',
+    });
+    expect(isBinaryOnlyPackage(root, '.', 'cli-pur')).toBe(true);
+    // Un paquet importable, même avec un binaire, reste jugeable : nodemon, tsx, concurrently.
+    expect(isBinaryOnlyPackage(root, '.', 'outil')).toBe(false);
+    expect(isBinaryOnlyPackage(root, 'apps/web', 'cli-pur')).toBe(true);
+    expect(isBinaryOnlyPackage(root, '.', 'absent')).toBe(false);
+  });
+
+  it('écarte la dépendance inutilisée d’un paquet qui n’expose qu’un binaire', () => {
+    const report = {
+      issues: [{ file: 'package.json', dependencies: [{ name: 'vercel', line: 2 }, { name: 'axios', line: 3 }] }],
+    };
+    const mapping = mapKnipReport(report, ['src/a.ts'], withTypes, { isBinaryOnly: (_dir, name) => name === 'vercel' });
+    expect(mapping.findings.map((finding) => finding.symbol)).toEqual(['axios']);
   });
 });
 

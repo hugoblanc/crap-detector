@@ -71,6 +71,7 @@ export function renderSummary(report: ScanReport): string[] {
     `duplication ${fraction(aggregates['duplication.percent'])} %`,
     `code mort   ${count(aggregates['deadcode.exports.count'])} exports, `
       + `${count(aggregates['deadcode.files.count'])} fichiers`,
+    ...entriesLine(report),
     ...outOfScopeLine(report),
     `graphe      ${count(aggregates['cycles.count'])} cycles, ${orphanCount(aggregates['orphans.count'])}`,
     `typage      ${count(aggregates['typesafety.escapes.count'])} échappements`,
@@ -104,6 +105,19 @@ function subprojectNote(report: ScanReport): string[] {
     `sous-projets ${shown}${more} ont leur propre package.json : `
       + 'scanner chacun avec --root <dossier> pour des résultats fiables',
   ];
+}
+
+/**
+ * Ce que crap-detector a déclaré à knip. Sans cette ligne, l'utilisateur découvre le sujet
+ * en tombant sur un fichier bien vivant signalé « jamais importé ».
+ */
+function entriesLine(report: ScanReport): string[] {
+  const deadCode = report.deadCode;
+  if (deadCode?.available !== true) return [];
+  const configFile = deadCode.reliability?.configFile;
+  if (configFile !== undefined) return [`entrées     points d'entrée lus dans ${configFile}`];
+  return [`entrées     ${count(deadCode.declaredEntries)} points d'entrée déclarés à knip `
+    + '(scripts npm, scripts/, configs de test)'];
 }
 
 /** Ce que les outils externes ont trouvé hors du périmètre, pour ceux qui ont tourné. */

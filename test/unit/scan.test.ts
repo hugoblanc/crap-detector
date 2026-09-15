@@ -408,7 +408,9 @@ describe('fiabilité de knip', () => {
     expect(unconfigured.aggregates['deadcode.files.count']).toBe(1);
     expect(unconfigured.findings.filter((finding) => finding.tool === 'knip').map((finding) => finding.rule).sort())
       .toEqual(['unused-export', 'unused-file']);
-    expect(renderSummary(unconfigured).join('\n')).toContain('knip sans configuration (knip.json ou clé knip du package.json)');
+    const summary = renderSummary(unconfigured).join('\n');
+    expect(summary).toContain('knip sans configuration du dépôt : 0 points d\'entrée lui ont été déclarés');
+    expect(summary).toContain('entrées     0 points d\'entrée déclarés à knip');
 
     writeFileSync(join(root, 'knip.json'), JSON.stringify({ entry: ['src/index.ts'] }), 'utf8');
     const configured = await scanFull(root, config, { skipChurn: true });

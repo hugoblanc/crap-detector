@@ -8,58 +8,39 @@
  * mesurés, sans configuration knip, elle va de 0,5 % à 14,5 % quand knip trouve ses points
  * d'entrée, et monte à 50,5 % quand il les rate : un tiers laisse de la marge des deux côtés.
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type { KnipConfig } from '../core/config.js';
 import type { KnipReliability } from '../core/dead-code.js';
 import type { DeadCodeReport } from '../core/types.js';
-
-/** Fichiers de configuration que knip 6 cherche, dans son ordre, à la racine seulement (constants.js). */
-const CONFIG_FILES = [
-  'knip.json',
-  'knip.jsonc',
-  '.knip.json',
-  '.knip.jsonc',
-  'knip.ts',
-  'knip.js',
-  'knip.config.ts',
-  'knip.config.js',
-];
+import { findKnipConfig } from './knip-entries.js';
 
 /** Règles qui dépendent des points d'entrée : un fichier non atteint rend morts ses exports et ses dépendances. */
 const REACHABILITY_RULES: ReadonlySet<string> = new Set([
   'unused-file',
   'unused-export',
+  'superfluous-export',
   'unused-type',
   'unused-dependency',
 ]);
 
 const CONFIG_DOC = 'https://github.com/hugoblanc/crap-detector#configurer-knip';
 
-/** Configuration que knip lira depuis cette racine, fichier dédié d'abord, puis clé `knip` du package.json. */
-function findKnipConfig(rootPath: string): string | undefined {
-  const file = CONFIG_FILES.find((name) => existsSync(join(rootPath, name)));
-  if (file !== undefined) return file;
-  try {
-    const manifest = JSON.parse(readFileSync(join(rootPath, 'package.json'), 'utf8')) as { knip?: unknown };
-    return manifest.knip === undefined ? undefined : 'package.json#knip';
-  } catch {
-    return undefined;
-  }
-}
-
 /** Une décimale : 2 fichiers sur 6 arrondis à « 33 % » paraîtraient ne pas dépasser un seuil de 33 %. */
 function percent(fraction: number): string {
   return `${String(Math.round(fraction * 1000) / 10).replace('.', ',')} %`;
 }
 
-function noteOf(reliability: KnipReliability, unusedFiles: number, filesScanned: number): string | undefined {
+function noteOf(
+  reliability: KnipReliability,
+  unusedFiles: number,
+  filesScanned: number,
+  declaredEntries: number,
+): string | undefined {
   const { configFile } = reliability;
   if (reliability.trusted) {
-    return configFile === undefined
-      ? 'knip sans configuration (knip.json ou clé knip du package.json) : ses fichiers, exports et dépendances '
-        + `inutilisés ne valent que ce qu'il devine des points d'entrée, voir ${CONFIG_DOC}`
-      : undefined;
+    if (configFile !== undefined) return undefined;
+    return `knip sans configuration du dépôt : ${String(declaredEntries)} points d'entrée lui ont été déclarés `
+      + '(cibles des scripts npm, dossiers scripts/ et bin/, secondes configurations de test). Un point d\'entrée '
+      + `lancé autrement, en sous-processus ou par un workflow de CI, reste invisible, voir ${CONFIG_DOC}`;
   }
   const action = configFile === undefined
     ? 'Déclarer les points d\'entrée dans un knip.json'
@@ -92,7 +73,7 @@ export function judgeKnipReport(
   };
   const configFile = findKnipConfig(rootPath);
   if (configFile !== undefined) reliability.configFile = configFile;
-  const note = noteOf(reliability, unusedFiles, filesScanned);
+  const note = noteOf(reliability, unusedFiles, filesScanned, deadCode.declaredEntries ?? 0);
   if (note !== undefined) reliability.note = note;
   return { ...deadCode, findings, reliability };
 }

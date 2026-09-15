@@ -3,8 +3,9 @@
 > **Statut : expérimental (v0.1).**
 > Le chemin rapide `crap-detector file`, celui du hook, tourne en environ 200 ms sur un fichier.
 > Le scan complet tourne en 5 à 10 secondes et sous 600 Mo sur des dépôts de 700 à 800 fichiers.
-> Les fichiers chargés par convention (migrations, tests e2e, scripts) sortent en `unused-file`
-> tant que le dépôt n'a pas de `knip.json` qui les déclare : voir [Configurer knip](#configurer-knip)
+> Les points d'entrée que le dépôt n'affirme ni par un script npm, ni par un dossier `scripts/`,
+> ni par une configuration de test, comme un script lancé en sous-processus, sortent encore en
+> `unused-file` : voir [Configurer knip](#configurer-knip)
 > et les [issues ouvertes](https://github.com/hugoblanc/crap-detector/issues).
 > À utiliser en local, à titre indicatif, pas encore comme gate de CI.
 
@@ -104,6 +105,8 @@ Sous 50 commits dans la fenêtre, le couplage n'est pas mesuré : les fichiers c
 
 **Supply chain.** Chaque import de paquet est jugé contre le `package.json` le plus proche du fichier, pas seulement celui de la racine.
 Un paquet non déclaré et introuvable dans tous les `node_modules` en remontant depuis le fichier sort en `unknown-dependency`, critique : c'est la signature du slopsquatting, quand un agent invente une dépendance plausible.
+Avant de l'affirmer, le specifier est réellement résolu : résolution de modules TypeScript sous les options effectives du tsconfig le plus proche, `paths` et champ `exports` compris, puis recherche d'un `declare module '…'` dans les déclarations des paquets installés, dépendances transitives suivies.
+Un alias de framework comme `@theme/Layout` ou un sous-module déclaré en ambiant comme `@docusaurus/Link` ne sort donc plus : sur une règle critique, un faux positif coûte plus cher que le signal.
 Un paquet non déclaré mais installé, arrivé par une dépendance transitive comme `express` via `@nestjs/platform-express`, sort en `unlisted-dependency`, majeur.
 Un import utilisé seulement comme type ne sort pas si son `@types/` est déclaré : TypeScript l'efface, rien n'est chargé à l'exécution.
 Quand knip a tourné, ses `unlisted-dependency` sur les fichiers que cette règle a pu juger sont écartés : un seul finding par cause.
@@ -134,17 +137,28 @@ saucissonne pour passer sous un seuil fait monter le premier et chuter le second
 ## Configurer knip
 
 Sans configuration, knip ne connaît que les points d'entrée du `package.json` et de ses plugins : tout fichier chargé autrement paraît mort, avec ses exports et ses dépendances.
-Déclarer dans un `knip.json` (champs `entry` et `project`) les points d'entrée invisibles :
+C'est la première cause de faux positifs mesurée sur cinq dépôts réels : 19 des 24 faux d'un échantillon de 497 alertes vérifiées à la main.
 
-- scripts lancés par leur chemin, depuis un shell ou une CI ; un script importé seulement par un autre script sort aussi tant que le premier n'est pas déclaré ;
-- serveur lancé par un script que knip ne suit pas, comme une commande de framework : ses modules sortent tous en `unused-file` ;
-- migrations et seeds chargées par glob, comme celles de TypeORM ;
-- fichiers désignés dans une config, par exemple un setup Vitest passé par `path.resolve` ;
-- configs de test passées en argument, comme `jest --config test/jest-e2e.json`, que knip ne lit pas : ses specs e2e sortent sinon en `unused-file` ;
-- fichiers chargés par la plateforme de déploiement, comme un `middleware.ts` Vercel dans une app Vite.
+**Ce que crap-detector déclare tout seul.** Quand le dépôt n'a pas sa propre configuration knip, le scan en écrit une temporaire, hors du dépôt, qui reconduit les entrées par défaut de knip et y ajoute ce que le dépôt affirme lui-même :
+
+- les fichiers source nommés par un script du `package.json`, par exemple la cible d'un `dev` ou d'un `tsx scripts/…` ;
+- la commande d'un `nodemon.json` ou d'un `nodemonConfig`, quand un script lance `nodemon` ;
+- les dossiers `scripts/` et `bin/` de la racine, lintés et formatés comme le reste du dépôt et pourtant jamais importés ;
+- les tests d'une seconde configuration jest citée par un script, comme `jest --config test/jest-e2e.json`, dont knip ne lit que la première : ses `testMatch`, ses `testRegex` et ses fichiers de setup deviennent des entrées.
+
+Le résumé de `scan` dit combien de points d'entrée ont été déclarés.
+Un paquet qui n'expose qu'un binaire, `bin` sans `main`, `module`, `exports` ni `types`, n'est jamais signalé inutilisé : aucun analyseur d'imports ne peut voir une CLI lancée à la main ou par un workflow.
+
+**Ce qu'il faut encore déclarer soi-même**, dans un `knip.json` (champs `entry` et `project`) :
+
+- un script lancé en sous-processus, `spawn(['tsx', 'scripts/…'])`, dont le chemin n'est qu'une chaîne de caractères ;
+- un fichier désigné par un alias de configuration, par exemple un `resolve.alias` d'un `vitest.config.ts` ;
+- un fichier chargé par la plateforme de déploiement, comme un `middleware.ts` Vercel dans une app Vite ;
+- des migrations ou des seeds chargées par glob, comme celles de TypeORM ;
+- les entrées d'un sous-projet d'un monorepo dont les workspaces ne sont pas déclarés : ce qui est déclaré automatiquement l'est pour le workspace racine.
 
 knip lit sa configuration à la racine analysée : `knip.json`, `knip.jsonc`, `.knip.json`, `.knip.jsonc`, `knip.ts`, `knip.js`, `knip.config.ts`, `knip.config.js`, ou la clé `knip` du `package.json`.
-Tant qu'il n'y en a aucune, le résumé de `scan` le signale.
+Dès qu'il y en a une, elle fait foi : crap-detector ne déclare plus rien.
 
 **Rapport jugé non fiable.** Quand plus d'un tiers des fichiers du périmètre, et au moins 10, sortent en `unused-file`, knip est jugé non fiable sur ce dépôt.
 Le minimum garde un petit dépôt de basculer sur un seul fichier vraiment mort : ce fichier reste une régression qui le nomme, pas une baseline incomparable.
@@ -172,6 +186,12 @@ Six règles exactes mais presque jamais utiles sont donc désactivées par défa
 | `unused-type` (knip) | 2 % |
 | `passthrough-wrapper` | 5 % |
 | `nested-callbacks` | 12 % |
+| `superfluous-export` (knip) | 0 % |
+
+`superfluous-export` est la part de `unused-export` qui ne demande que de retirer un mot-clé : le symbole n'a pas d'importeur, mais il sert dans son propre fichier.
+knip range les deux sous le même verdict ; l'usage local se lit sur l'AST du fichier.
+Sur les 32 alertes `unused-export` vérifiées à la main, 19 sortent ainsi de la règle, aucune n'ayant été jugée utile à corriger, et les 13 qui restent en comptent 5 : l'utilité passe de 16 % à 38 %.
+Ce qui reste sous `unused-export` est du code mort supprimable, en majeur ; l'export superflu sort en mineur, règle activable par `"rules": { "superfluous-export": true }`.
 
 Désactivée, une règle n'est pas mesurée : ni finding, ni dette dans la baseline, ni lignes comptées dans la verbosité.
 Chacune se réactive par sa clé dans la section `rules` de `crap-detector.json`, par exemple `"rules": { "redundant-else": true }`.
@@ -330,8 +350,11 @@ Si les deux sont utilisés, garder un seul jeu de seuils comme source de vérit�
   pas les alias de bundler (Vite, webpack) ni les workspaces de monorepo : sur ces
   dépôts, des arêtes manquent, donc des cycles et des couplages explicites peuvent
   être ratés.
-- Un module virtuel fourni par un bundler ou un framework, comme `@theme/Layout` chez Docusaurus,
-  n'est ni déclaré ni installé : il sort en `unknown-dependency` critique.
+- Un point d'entrée lancé en sous-processus, par exemple un script CLI démarré par un test
+  via `spawn(['tsx', 'scripts/…'])`, reste invisible : le chemin est une chaîne de caractères,
+  qu'aucun graphe d'imports ne suit. Même chose pour un fichier désigné par un alias de
+  configuration (`resolve.alias` d'un `vitest.config.ts`) ou par une convention de plateforme
+  (`middleware.ts` chez Vercel). À déclarer dans un `knip.json` du dépôt.
 - Il n'y a pas de règles de frontières entre couches (`boundaries`). C'est le jour où
   il en faudra que `dependency-cruiser` redeviendra le bon outil.
 - La détection de commentaires redondants est absente : aucune formulation déterministe

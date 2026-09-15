@@ -47,6 +47,7 @@ export type ReportThresholds = Record<(typeof REPORTED_RULES)[keyof typeof REPOR
 /**
  * Règles désactivées par défaut : exactes, mais presque jamais utiles à corriger d'après la
  * mesure de précision (docs/PRECISION-2026-09.md). Désactivées, elles ne sont pas mesurées.
+ * `superfluous-export` en fait partie : un `export` en trop noyait le vrai code mort.
  */
 const OPTIONAL_RULES = [
   'assign-then-return',
@@ -54,6 +55,7 @@ const OPTIONAL_RULES = [
   'nested-callbacks',
   'passthrough-wrapper',
   'redundant-else',
+  'superfluous-export',
   'unused-type',
 ] as const;
 

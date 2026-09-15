@@ -106,6 +106,8 @@ export interface DeadCodeReport extends ReportEnvelope {
   findings: Finding[];
   /** Findings écartés parce que leur fichier est hors du périmètre ; knip, lui, lit tout le projet. */
   outOfScope: number;
+  /** Points d'entrée déclarés à knip par crap-detector ; 0 quand le dépôt configure knip lui-même. */
+  declaredEntries?: number;
   reliability?: KnipReliability;
 }
 

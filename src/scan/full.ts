@@ -94,14 +94,20 @@ async function addChurn(report: ScanReport, fast: FastScan, config: ResolvedConf
 
 /** knip et jscpd complètent le rapport en place : findings, agrégats et verbosité. */
 async function addExternalTools(rootPath: string, fast: FastScan, report: ScanReport, config: ResolvedConfig): Promise<void> {
-  const [{ analyzeDeadCode }, { analyzeDuplication }, { judgeKnipReport }] = await Promise.all([
+  const [{ analyzeDeadCode }, { analyzeDuplication }, { judgeKnipReport }, { localUsageLookup }] = await Promise.all([
     import('../adapters/knip.js'),
     import('../adapters/jscpd.js'),
     import('../adapters/knip-reliability.js'),
+    import('../imports/local-usage.js'),
   ]);
   const { aggregates, findings } = report;
 
-  const mapped = withoutNativeDuplicates(rootPath, fast.files, analyzeDeadCode(rootPath, fast.files, config.rules));
+  const deadCodeOptions = { usedInOwnFile: localUsageLookup(fast.sourceFiles) };
+  const mapped = withoutNativeDuplicates(
+    rootPath,
+    fast.files,
+    analyzeDeadCode(rootPath, fast.files, config.rules, deadCodeOptions),
+  );
   const deadCode = judgeKnipReport(rootPath, mapped, fast.files.length, config.knip);
   report.deadCode = deadCode;
   if (deadCode.available) {
