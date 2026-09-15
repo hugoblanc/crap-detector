@@ -25,6 +25,8 @@ import type {
   SlopReport,
 } from '../core/types.js';
 import { analyzeFile, collectFiles, findingsForFiles, summarizeFiles } from '../metrics/analyze.js';
+import { fileSloc } from '../metrics/sizes.js';
+import { collectTestFiles } from './test-files.js';
 import { analyzeImports, dependencyContext, dependencyFinding } from '../imports/analyze.js';
 import { analyzeGraph } from '../imports/graph.js';
 import type { ImportGraph } from '../imports/extract.js';
@@ -45,6 +47,10 @@ export interface FastScan {
   vendored: string[];
   /** Fichiers de ces sous-projets, hors mesure mais transmis à jscpd pour garder les clones du code vivant. */
   vendoredFiles: string[];
+  /** Lignes de code de ces fichiers, pour recouper un filesScanned plus bas que prévu. */
+  vendoredSloc: number;
+  /** Détection désactivée faute d'avoir lu les espaces de travail déclarés ; aucun dossier écarté. */
+  vendoredUnreadableReason?: string;
   metrics: MetricsReport;
   slop: SlopReport;
   /** Occurrences brutes, réutilisées par le scan complet pour y ajouter les clones. */
@@ -68,40 +74,78 @@ export function loadSourceFiles(rootPath: string, files: string[]): Map<string, 
 }
 
 /** Ce que le scan mesure, une fois les sous-projets vendorisés retirés des fichiers collectés. */
-type MeasuredScope = Pick<FastScan, 'files' | 'sourceFiles' | 'subprojects' | 'vendored' | 'vendoredFiles'>;
+type MeasuredScope = Pick<
+  FastScan,
+  'files' | 'sourceFiles' | 'subprojects' | 'vendored' | 'vendoredFiles' | 'vendoredSloc' | 'vendoredUnreadableReason'
+>;
 
-function measuredScope(rootPath: string, collected: string[], loaded: Map<string, SourceFile>): MeasuredScope {
+interface ScopeInput {
+  rootPath: string;
+  config: ResolvedConfig;
+  ignored?: IgnoredPaths;
+  /** Fichiers du périmètre avant retrait des sous-projets vendorisés, et leurs sources. */
+  collected: string[];
+  loaded: Map<string, SourceFile>;
+}
+
+/**
+ * Importeurs à considérer : les fichiers mesurés, plus les tests, exclus de la mesure mais pas
+ * de la question « quelqu'un s'en sert-il ? ». Les tests ne sont chargés que s'il y a un
+ * sous-projet à juger : sur un dépôt sans sous-projet, ce second parcours n'a pas lieu.
+ */
+function importerSources(input: ScopeInput): Map<string, SourceFile> {
+  const tests = collectTestFiles(input.rootPath, input.config.scope, input.collected, input.ignored);
+  if (tests.length === 0) return input.loaded;
+  return new Map([...input.loaded, ...loadSourceFiles(input.rootPath, tests)]);
+}
+
+function measuredScope(input: ScopeInput): MeasuredScope {
+  const { rootPath, collected, loaded } = input;
   const subprojects = subprojectDirs(rootPath, collected);
-  const vendored = vendoredSubprojects(rootPath, subprojects, loaded);
-  const files = withoutVendored(collected, vendored);
+  const scan = subprojects.length === 0
+    ? { dirs: [] }
+    : vendoredSubprojects(rootPath, subprojects, importerSources(input));
+  const files = withoutVendored(collected, scan.dirs);
   const kept = new Set(files);
-  return {
+  const vendoredFiles = collected.filter((file) => !kept.has(file));
+  const scope: MeasuredScope = {
     files,
-    sourceFiles: vendored.length === 0 ? loaded : new Map([...loaded].filter(([file]) => kept.has(file))),
+    sourceFiles: scan.dirs.length === 0 ? loaded : new Map([...loaded].filter(([file]) => kept.has(file))),
     subprojects,
-    vendored,
-    vendoredFiles: collected.filter((file) => !kept.has(file)),
+    vendored: scan.dirs,
+    vendoredFiles,
+    vendoredSloc: vendoredFiles.reduce((total, file) => {
+      const source = loaded.get(file);
+      return source === undefined ? total : total + fileSloc(source);
+    }, 0),
+  };
+  if (scan.unreadableReason !== undefined) scope.vendoredUnreadableReason = scan.unreadableReason;
+  return scope;
+}
+
+/** Métriques AST des fichiers mesurés, dans l'ordre du périmètre. */
+function metricsReport(rootPath: string, scope: MeasuredScope, config: ResolvedConfig): MetricsReport {
+  const fileMetrics: FileMetrics[] = [];
+  for (const [relative, sourceFile] of scope.sourceFiles) {
+    fileMetrics.push(analyzeFile(sourceFile, relative));
+  }
+  return {
+    ...envelope(rootPath, 'ts-morph'),
+    filesScanned: scope.files.length,
+    summary: summarizeFiles(fileMetrics, config),
+    files: fileMetrics,
+    findings: findingsForFiles(fileMetrics, config),
   };
 }
 
 export function scanFast(rootPath: string, config: ResolvedConfig, ignored?: IgnoredPaths): FastScan {
   const collected = collectFiles(rootPath, config.scope, ignored);
-  const scope = measuredScope(rootPath, collected, loadSourceFiles(rootPath, collected));
-  const { files, sourceFiles } = scope;
+  const loaded = loadSourceFiles(rootPath, collected);
+  const scope = measuredScope({ rootPath, config, ignored, collected, loaded });
+  const { sourceFiles } = scope;
 
-  const fileMetrics: FileMetrics[] = [];
-  for (const [relative, sourceFile] of sourceFiles) {
-    fileMetrics.push(analyzeFile(sourceFile, relative));
-  }
-  const summary = summarizeFiles(fileMetrics, config);
-  const metrics: MetricsReport = {
-    ...envelope(rootPath, 'ts-morph'),
-    filesScanned: files.length,
-    summary,
-    files: fileMetrics,
-    findings: findingsForFiles(fileMetrics, config),
-  };
-
+  const metrics = metricsReport(rootPath, scope, config);
+  const { summary } = metrics;
   const slopAnalysis = analyzeSlop(rootPath, sourceFiles, config.rules);
   const slop = slopAnalysis.report;
   const importAnalysis = analyzeImports(rootPath, sourceFiles);

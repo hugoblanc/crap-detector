@@ -40,6 +40,10 @@ export interface ReportScope extends BaselineScope {
   subprojects: string[];
   /** Toujours renseigné sur un rapport, même vide : un scan sait toujours ce qu'il a écarté. */
   vendored: string[];
+  /** Ce que ces sous-projets soustraient à la mesure : de quoi recouper un filesScanned inattendu. */
+  vendoredSkipped: { files: number; sloc: number };
+  /** Espaces de travail déclarés mais illisibles : la détection s'est désactivée, rien n'a été écarté. */
+  vendoredUnreadableReason?: string;
 }
 
 export function baselineScope(scope: ReportScope): BaselineScope {

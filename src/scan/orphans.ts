@@ -13,25 +13,9 @@ import { collectImports } from '../imports/analyze.js';
 import { resolveImport } from '../imports/extract.js';
 import { findOrphans, graphFindings } from '../imports/graph.js';
 import { readManifest } from '../imports/manifest.js';
-import { collectFiles } from '../metrics/analyze.js';
 import { loadSourceFiles } from './fast.js';
 import type { FastScan } from './fast.js';
-
-/** Globs d'exclusion qui visent des tests : suffixes `.test.ts`, `.spec.ts`, `.e2e-spec.ts`, dossiers `__tests__` et `test`. */
-const TEST_GLOB = /(?:^|[/.])(?:tests?|spec|e2e-spec)(?:[/.]|$)|__tests__/;
-
-/** Fichiers que le périmètre exclut seulement parce que ce sont des tests. */
-function collectTestFiles(
-  rootPath: string,
-  scope: ScopeConfig,
-  measured: readonly string[],
-  ignored?: IgnoredPaths,
-): string[] {
-  const exclude = scope.exclude.filter((glob) => !TEST_GLOB.test(glob));
-  const inScope = new Set(measured);
-  return collectFiles(rootPath, { include: scope.include, exclude }, ignored)
-    .filter((file) => !inScope.has(file));
-}
+import { collectTestFiles } from './test-files.js';
 
 /** Fichiers mesurés qu'au moins un test importe, par chemin relatif ou alias de la racine. */
 function importedByTests(rootPath: string, tests: string[], measured: ReadonlySet<string>): Set<string> {

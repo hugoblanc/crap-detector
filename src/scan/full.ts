@@ -100,7 +100,7 @@ async function addExternalTools(rootPath: string, fast: FastScan, report: ScanRe
     import('../adapters/knip-reliability.js'),
     import('../imports/local-usage.js'),
   ]);
-  const { aggregates, findings } = report;
+  const { aggregates } = report;
 
   const deadCodeOptions = { exportOrigin: exportOriginLookup(fast.sourceFiles) };
   const mapped = withoutNativeDuplicates(
@@ -110,6 +110,8 @@ async function addExternalTools(rootPath: string, fast: FastScan, report: ScanRe
   );
   const deadCode = judgeKnipReport(rootPath, mapped, fast.files.length, config.knip);
   report.deadCode = deadCode;
+  // Seul ce bloc verse des findings knip au rapport : knip absent ou sortie illisible, `available`
+  // est false, `findings` est vide et rien n'est ajouté ni rétrogradé. Voir le test « sans knip ».
   if (deadCode.available) {
     report.scope.knipTrusted = deadCode.reliability?.trusted !== false;
     // Non fiable, knip n'a rien mesuré du code mort : agrégats absents, pas à zéro.
@@ -117,7 +119,7 @@ async function addExternalTools(rootPath: string, fast: FastScan, report: ScanRe
       aggregates['deadcode.exports.count'] = deadCode.summary.unusedExports;
       aggregates['deadcode.files.count'] = deadCode.summary.unusedFiles;
     }
-    report.findings = withoutDeadFileMetrics([...findings, ...deadCode.findings], deadCode.findings);
+    report.findings = demoteDeadFileMetrics([...report.findings, ...deadCode.findings], deadCode);
   }
 
   // jscpd mesure aussi les fichiers vendorisés : sans eux, la copie qu'un fichier vivant en fait
@@ -157,16 +159,32 @@ export function withoutNativeDuplicates(rootPath: string, files: readonly string
 /**
  * Un fichier que knip classe `unused-file` est à supprimer, pas à refactorer : sa complexité, sa
  * longueur, son imbrication et son slop ne disent rien de plus que l'unused-file, et demandent
- * l'inverse du bon correctif. Même principe que withoutNativeDuplicates : un seul finding par cause.
+ * l'inverse du bon correctif. Ces findings sont donc rétrogradés sous le seuil de signalement,
+ * comme le fait déjà metrics/analyze.ts : masqués du texte sans `--all`, toujours comptés par le
+ * cliquet. Les supprimer rendrait le cliquet aveugle sur ces fichiers, et une fonction qui passe
+ * de 57 à 302 lignes dans l'un d'eux cesserait d'être une régression.
  *
- * Seul l'outil `metrics` (métriques AST et règles de slop) est écarté. Un paquet non déclaré
+ * Conditionné à une configuration knip écrite par le dépôt (`reliability.configFile`) : sans
+ * elle, knip devine les points d'entrée et classe morts des fichiers bien vivants — sur
+ * athena_api, 12 des 15 fichiers concernés restent en place (specs d'une seconde config jest,
+ * migrations chargées par un glob, middleware de convention, scripts lancés à la main), soit
+ * 46 % des findings visés. La configuration du dépôt est le signal dont l'utilisateur répond ;
+ * celle que crap-detector fabrique pour knip n'entre pas dans ce champ, elle vit dans un
+ * dossier temporaire (adapters/knip-entries.ts).
+ *
+ * Seul l'outil `metrics` (métriques AST et règles de slop) est visé. Un paquet non déclaré
  * (`imports`) reste un vrai correctif à faire au package.json même dans un fichier mort, et les
  * clones (`jscpd`) ont un second côté vivant que leur agrégat compte de toute façon.
  */
-export function withoutDeadFileMetrics(findings: readonly Finding[], deadCode: readonly Finding[]): Finding[] {
-  const dead = new Set(deadCode.filter((finding) => finding.rule === 'unused-file').map((finding) => finding.file));
+export function demoteDeadFileMetrics(findings: readonly Finding[], deadCode: DeadCodeReport): Finding[] {
+  if (deadCode.reliability?.configFile === undefined) return [...findings];
+  const dead = new Set(deadCode.findings
+    .filter((finding) => finding.rule === 'unused-file')
+    .map((finding) => finding.file));
   if (dead.size === 0) return [...findings];
-  return findings.filter((finding) => finding.tool !== 'metrics' || !dead.has(finding.file));
+  return findings.map((finding) => (finding.tool === 'metrics' && dead.has(finding.file)
+    ? { ...finding, belowReportThreshold: true as const }
+    : finding));
 }
 
 /** La masse érodée est incluse dans la masse totale : erosion.fraction ne peut pas dépasser 1. */
@@ -210,8 +228,12 @@ function reportScope(config: ResolvedConfig, ignored: GitIgnoredResult, fast: Fa
     importRules: 3,
     rules: enabledOptionalRules(config.rules),
     vendored: [...fast.vendored],
+    vendoredSkipped: { files: fast.vendoredFiles.length, sloc: fast.vendoredSloc },
     subprojects: [...fast.subprojects],
   };
+  if (fast.vendoredUnreadableReason !== undefined) {
+    scope.vendoredUnreadableReason = fast.vendoredUnreadableReason;
+  }
   if (ignored.reason !== undefined) scope.gitignoreUnavailableReason = ignored.reason;
   return scope;
 }

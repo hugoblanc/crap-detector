@@ -141,15 +141,19 @@ Le résumé dit combien de findings ont été écartés comme hors périmètre.
 
 `unused-file`, `unused-export` et `unused-dependency` ne valent que ce que knip sait des points d'entrée : voir [Configurer knip](#configurer-knip).
 
-Un fichier que knip classe `unused-file` est à supprimer, pas à refactorer : ses alertes de métriques et de slop sont écartées du rapport, un seul finding par cause.
-Son paquet non déclaré et ses blocs dupliqués restent, eux : ils demandent un autre correctif, au `package.json` ou au fichier vivant qui porte la copie.
+Un fichier que knip classe `unused-file` est à supprimer, pas à refactorer : ses alertes de métriques et de slop passent sous le seuil de signalement, masquées du texte sans `--all`, toujours comptées par le cliquet.
+Elles ne sont pas supprimées : le cliquet cesserait de surveiller ce fichier, et une fonction qui y passe de 57 à 302 lignes ne serait plus une régression.
+Seulement si le dépôt a écrit sa propre configuration knip, qui dit ce qui est vraiment un point d'entrée.
+Sans elle, knip devine, et sur un dépôt mesuré 12 des 15 fichiers ainsi classés morts restaient bien en place : la règle ne masque alors rien.
+Le paquet non déclaré et les blocs dupliqués de ce fichier restent visibles : ils demandent un autre correctif, au `package.json` ou au fichier vivant qui porte la copie.
 
 **Monorepo.** knip lancé depuis la racine d'un dépôt dont les workspaces ne sont pas déclarés juge tout contre la racine : sur un monorepo pnpm sans `packages` dans `pnpm-workspace.yaml`, il a signalé comme inutilisés des centaines de fichiers d'un sous-projet Vite, contre quelques-uns lancé depuis le dossier du sous-projet.
 Quand des sous-dossiers du périmètre ont leur propre `package.json`, le résumé les liste : scanner chacun séparément avec `--root <dossier>`.
 
-**Sous-projet vendorisé.** Un de ces sous-dossiers qu'aucun fichier du dépôt n'importe, et que la racine ne déclare pas comme espace de travail (`workspaces` du `package.json`, `packages` du `pnpm-workspace.yaml`), est du code tiers embarqué : il sort du périmètre, et le résumé dit lesquels.
-Le mesurer gonflerait les agrégats et la baseline sans qu'aucune décision ne s'ensuive, puisque la seule action possible est de le supprimer en bloc.
-Les trois conditions se croisent toujours : un `package.json` réduit à `{"type": "module"}` règle le format des modules d'un dossier sans en faire un projet, et un dossier importé de l'extérieur est du code du projet quel que soit son manifeste.
+**Sous-projet vendorisé.** Un de ces sous-dossiers qu'aucun fichier du dépôt n'importe, tests compris, et que la racine ne déclare pas comme espace de travail (`workspaces` du `package.json`, `packages` du `pnpm-workspace.yaml`), sort du périmètre : le résumé le nomme, avec le nombre de fichiers et de lignes qu'il soustrait à la mesure.
+Le mesurer gonflerait les agrégats et la baseline sans qu'aucune décision ne s'ensuive, puisque la seule action possible est de le scanner à part ou de le supprimer en bloc.
+Les trois conditions se croisent toujours : un `package.json` réduit à `{"type": "module"}` règle le format des modules d'un dossier sans en faire un projet, un dossier importé de l'extérieur est du code du projet quel que soit son manifeste, et un dossier utilisé seulement par des tests n'est pas sans usage — même promesse que la règle orphan.
+Le lecteur d'espaces de travail est maison, limité au champ `packages` (séquence en bloc, séquence de flux sur une ligne ou plusieurs, commentaires de fin de ligne compris) : tout ce qu'il ne sait pas lire désactive la détection, aucun dossier n'est écarté, et le résumé dit pourquoi.
 `jscpd` continue de lire ses fichiers, sans jamais y poser de finding : un clone est une relation entre deux fichiers, et le retirer effacerait la copie que le code vivant en fait, qui est justement la raison de le supprimer.
 Le champ `scope.vendored` de la baseline enregistre la liste : elle change, la baseline est déclarée incomparable plutôt que de faire passer la dette du sous-projet pour corrigée.
 

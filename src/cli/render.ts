@@ -107,13 +107,15 @@ function listed(dirs: string[]): string {
  * au compte sans explication.
  */
 function subprojectNote(report: ScanReport): string[] {
-  const { subprojects, vendored } = report.scope;
+  const { subprojects, vendored, vendoredSkipped } = report.scope;
   const measured = subprojects.filter((dir) => !vendored.includes(dir));
   const notes: string[] = [];
   if (vendored.length > 0) {
     notes.push(
-      `sous-projets ${listed(vendored)} écartés du périmètre : leur propre package.json, `
-        + 'aucun importeur, pas un espace de travail déclaré. Du code tiers embarqué se supprime, il ne se refactore pas',
+      `sous-projets ${listed(vendored)} écartés du périmètre `
+        + `(${String(vendoredSkipped.files)} fichiers, ${String(vendoredSkipped.sloc)} lignes non mesurées) : `
+        + 'leur propre package.json, aucun importeur dans le dépôt ni dans ses tests, '
+        + 'aucun espace de travail déclaré. Les scanner à part avec --root <dossier>',
     );
   }
   if (measured.length > 0) {
@@ -172,6 +174,10 @@ function unavailableNotes(report: ScanReport): string[] {
   const gitignoreReason = report.scope.gitignoreUnavailableReason;
   if (gitignoreReason !== undefined) {
     notes.push(`fichiers ignorés par git non exclus : ${gitignoreReason}`);
+  }
+  const vendoredReason = report.scope.vendoredUnreadableReason;
+  if (vendoredReason !== undefined) {
+    notes.push(`espaces de travail non lus (${vendoredReason}) : aucun sous-projet écarté du périmètre`);
   }
   if (!report.imports.manifestTrusted) {
     notes.push(`dépendances non vérifiées : ${report.imports.manifestReason ?? 'manifeste illisible'}`);

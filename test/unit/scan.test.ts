@@ -3,18 +3,19 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { makeBaseline } from '../../src/baseline/baseline.js';
-import { renderSummary } from '../../src/cli/render.js';
+import { makeBaseline, summarizeDebt } from '../../src/baseline/baseline.js';
+import { renderSummary, visibleFindings } from '../../src/cli/render.js';
 import { resolveConfig } from '../../src/core/config.js';
 import { makeFinding } from '../../src/core/findings.js';
 import { subprojectDirs } from '../../src/imports/manifest.js';
 import { scanFast, scanFile } from '../../src/scan/fast.js';
 import {
   assertRatiosInRange,
+  demoteDeadFileMetrics,
   scanFull,
-  withoutDeadFileMetrics,
   withoutNativeDuplicates,
 } from '../../src/scan/full.js';
+import type { DeadCodeReport, Finding } from '../../src/core/types.js';
 
 const created: string[] = [];
 const config = resolveConfig({});
@@ -177,6 +178,10 @@ describe('scanFull', () => {
     expect(report.duplication).toBeUndefined();
     expect(report.filesScanned).toBe(2);
     expect(report.thresholds.cyclomaticComplexity).toBe(10);
+    // Garantie tenue par le seul `if (deadCode.available)` de addExternalTools : sans knip,
+    // aucun finding de code mort n'entre au rapport, et aucun autre n'est rétrogradé.
+    expect(report.findings.some((finding) => finding.tool === 'knip')).toBe(false);
+    expect(report.findings.some((finding) => finding.belowReportThreshold === true)).toBe(false);
   });
 
   it('ajoute churn et couplage sur un dépôt git, sauf si l’historique est trop court', async () => {
@@ -312,20 +317,39 @@ describe('scanFull', () => {
       .toEqual(['src/lost.ts']);
   });
 
+  /** Sous-projet mesuré : son fichier est importé par la racine, il reste donc dans le périmètre. */
+  const DASHBOARD = {
+    ...PROJECT,
+    'src/entry.ts': [
+      "import { helper } from './helper.js';",
+      "import { view } from '../dashboard/src/view.js';",
+      'export const run = (): number => helper(1) + Number(view);',
+    ].join('\n'),
+    'dashboard/package.json': JSON.stringify({ dependencies: { chart: '1.0.0' } }),
+    'dashboard/node_modules/chart/package.json': '{}',
+    'dashboard/src/view.ts': "import { draw } from 'chart';\nexport const view = draw;\n",
+  };
+
   it('signale les sous-dossiers qui ont leur propre package.json', async () => {
-    const root = makeRoot({
-      ...PROJECT,
-      'package.json': JSON.stringify({ name: 'fixture', workspaces: ['dashboard'], dependencies: {} }),
-      'dashboard/package.json': JSON.stringify({ dependencies: { chart: '1.0.0' } }),
-      'dashboard/node_modules/chart/package.json': '{}',
-      'dashboard/src/view.ts': "import { draw } from 'chart';\nexport const view = draw;\n",
-    });
-    const report = await scanFull(root, config, { skipChurn: true, skipExternalTools: true });
+    const report = await scanFull(makeRoot(DASHBOARD), config, { skipChurn: true, skipExternalTools: true });
     expect(report.scope.subprojects).toEqual(['dashboard']);
     expect(report.scope.vendored).toEqual([]);
+    // Jugé contre son propre package.json : 'chart' y est déclaré, aucun paquet manquant.
     expect(report.findings.filter((finding) => finding.rule.endsWith('-dependency'))).toEqual([]);
+    expect(report.filesScanned).toBe(3);
     expect(renderSummary(report).join('\n'))
       .toContain('sous-projets dashboard ont leur propre package.json : scanner chacun avec --root');
+  });
+
+  it('mesure un sous-projet déclaré comme espace de travail, même sans importeur', async () => {
+    const root = makeRoot({
+      ...DASHBOARD,
+      ...PROJECT,
+      'package.json': JSON.stringify({ name: 'fixture', workspaces: ['dashboard'], dependencies: {} }),
+    });
+    const report = await scanFull(root, config, { skipChurn: true, skipExternalTools: true });
+    expect(report.scope.vendored).toEqual([]);
+    expect(report.filesScanned).toBe(3);
   });
 
   it('écarte du périmètre un sous-projet que personne n’importe', async () => {
@@ -336,10 +360,12 @@ describe('scanFull', () => {
     });
     const report = await scanFull(root, config, { skipChurn: true, skipExternalTools: true });
     expect(report.scope.vendored).toEqual(['src/vendor']);
+    expect(report.scope.vendoredSkipped).toEqual({ files: 1, sloc: 1 });
     expect(report.filesScanned).toBe(2);
     expect(report.findings.some((finding) => finding.file.startsWith('src/vendor/'))).toBe(false);
     expect(report.aggregates['typesafety.escapes.count']).toBe(1);
-    expect(renderSummary(report).join('\n')).toContain('sous-projets src/vendor écartés du périmètre');
+    expect(renderSummary(report).join('\n'))
+      .toContain('sous-projets src/vendor écartés du périmètre (1 fichiers, 1 lignes non mesurées)');
   });
 
   it('mesure un sous-projet dès qu’un fichier du dépôt l’importe', async () => {
@@ -357,6 +383,33 @@ describe('scanFull', () => {
     expect(report.scope.subprojects).toEqual(['src/vendor']);
     expect(report.scope.vendored).toEqual([]);
     expect(report.filesScanned).toBe(3);
+  });
+
+  it('mesure un sous-projet que seul un test importe, comme la règle orphan le promet', async () => {
+    const root = makeRoot({
+      ...PROJECT,
+      'src/vendor/package.json': JSON.stringify({ name: 'scraper', dependencies: { axios: '1.0.0' } }),
+      'src/vendor/scrape.ts': 'export function scrape(value: number): number { return value; }\n',
+      'src/vendor.test.ts': "import { scrape } from './vendor/scrape.js';\nvoid scrape(1);\n",
+    });
+    const report = await scanFull(root, config, { skipChurn: true, skipExternalTools: true });
+    expect(report.scope.vendored).toEqual([]);
+    // Le test reste hors mesure : il compte comme importeur, pas comme fichier scanné.
+    expect(report.filesScanned).toBe(3);
+  });
+
+  it('n’écarte rien quand les espaces de travail déclarés sont illisibles', async () => {
+    const root = makeRoot({
+      ...PROJECT,
+      'pnpm-workspace.yaml': 'packages: [\n  - pas une séquence\n',
+      'src/vendor/package.json': JSON.stringify({ name: 'scraper', dependencies: { axios: '1.0.0' } }),
+      'src/vendor/scrape.ts': 'export function scrape(value: number): number { return value; }\n',
+    });
+    const report = await scanFull(root, config, { skipChurn: true, skipExternalTools: true });
+    expect(report.scope.vendored).toEqual([]);
+    expect(report.filesScanned).toBe(3);
+    expect(renderSummary(report).join('\n'))
+      .toContain('espaces de travail non lus (séquence packages non fermée dans pnpm-workspace.yaml)');
   });
 
   it('garde la verbosité sous 1 quand les clones couvrent des lignes blanches', async () => {
@@ -475,34 +528,77 @@ describe('withoutNativeDuplicates', () => {
   });
 });
 
-describe('withoutDeadFileMetrics', () => {
-  const dead = [makeFinding({ tool: 'knip', rule: 'unused-file', file: 'src/dead.ts', message: 'jamais importé' })];
-  const on = (tool: 'metrics' | 'imports' | 'jscpd', rule: string, file: string) =>
+describe('demoteDeadFileMetrics', () => {
+  const on = (tool: 'metrics' | 'imports' | 'jscpd', rule: string, file: string): Finding =>
     makeFinding({ tool, rule, file, symbol: 'f', message: 'peu importe' });
+  const unusedFile = makeFinding({ tool: 'knip', rule: 'unused-file', file: 'src/dead.ts', message: 'jamais importé' });
 
-  it('écarte les métriques et le slop d’un fichier que knip signale mort', () => {
-    const kept = withoutDeadFileMetrics([
+  /** DeadCodeReport minimal : seuls les champs que la rétrogradation lit sont remplis. */
+  const deadCode = (configFile: string | undefined, findings: Finding[] = [unusedFile]): DeadCodeReport => ({
+    generatorVersion: '0.1.0',
+    generatedAt: '',
+    rootPath: '/repo',
+    toolVersion: '6.32.2',
+    available: true,
+    summary: { unusedFiles: findings.length, unusedExports: 0, unusedDependencies: 0 },
+    findings,
+    outOfScope: 0,
+    reliability: {
+      trusted: true,
+      unusedFileFraction: 0,
+      maxUnusedFileFraction: 0.33,
+      minUnusedFiles: 5,
+      discarded: 0,
+      ...(configFile === undefined ? {} : { configFile }),
+    },
+  });
+
+  it('masque les métriques et le slop d’un fichier mort sans les retirer du cliquet', () => {
+    const kept = demoteDeadFileMetrics([
       on('metrics', 'cognitive-complexity', 'src/dead.ts'),
       on('metrics', 'type-escape-any', 'src/dead.ts'),
       on('metrics', 'cognitive-complexity', 'src/live.ts'),
-      ...dead,
-    ], dead);
-    expect(kept.map((finding) => `${finding.tool}|${finding.rule}|${finding.file}`))
-      .toEqual(['metrics|cognitive-complexity|src/live.ts', 'knip|unused-file|src/dead.ts']);
+      unusedFile,
+    ], deadCode('knip.json'));
+    expect(kept).toHaveLength(4);
+    expect(kept.filter((finding) => finding.belowReportThreshold === true).map((finding) => finding.rule))
+      .toEqual(['cognitive-complexity', 'type-escape-any']);
+    expect(visibleFindings(kept, false).map((finding) => finding.file))
+      .toEqual(['src/live.ts', 'src/dead.ts']);
   });
 
-  it('garde le paquet non déclaré et le clone, qui demandent un autre correctif', () => {
-    const kept = withoutDeadFileMetrics([
+  it('ne masque rien sans configuration knip écrite par le dépôt', () => {
+    const findings = [on('metrics', 'cognitive-complexity', 'src/dead.ts'), unusedFile];
+    expect(demoteDeadFileMetrics(findings, deadCode(undefined))).toEqual(findings);
+  });
+
+  it('garde visibles le paquet non déclaré et le clone, qui demandent un autre correctif', () => {
+    const kept = demoteDeadFileMetrics([
       on('imports', 'unlisted-dependency', 'src/dead.ts'),
       on('jscpd', 'duplicate-block', 'src/dead.ts'),
-      ...dead,
-    ], dead);
-    expect(kept).toHaveLength(3);
+      unusedFile,
+    ], deadCode('knip.json'));
+    expect(visibleFindings(kept, false)).toHaveLength(3);
   });
 
   it('ne touche à rien sans fichier mort signalé', () => {
     const findings = [on('metrics', 'file-length', 'src/live.ts')];
-    expect(withoutDeadFileMetrics(findings, [])).toEqual(findings);
+    expect(demoteDeadFileMetrics(findings, deadCode('knip.json', []))).toEqual(findings);
+  });
+
+  it('laisse la dette du fichier mort dans la baseline : le cliquet continue de le surveiller', () => {
+    const complexity = makeFinding({
+      tool: 'metrics',
+      rule: 'function-length',
+      file: 'src/dead.ts',
+      symbol: 'run',
+      value: 57,
+      threshold: 50,
+      message: 'run : lignes 57 > 50',
+    });
+    const kept = demoteDeadFileMetrics([complexity, unusedFile], deadCode('knip.json'));
+    expect(visibleFindings(kept, false)).toHaveLength(1);
+    expect(summarizeDebt(kept).maxima['metrics|function-length|src/dead.ts']).toBe(57);
   });
 });
 

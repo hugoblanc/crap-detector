@@ -23,7 +23,7 @@ import {
   readManifest,
   subprojectDirs,
 } from '../../src/imports/manifest.js';
-import { pnpmWorkspaceGlobs, vendoredSubprojects } from '../../src/imports/vendored.js';
+import { pnpmWorkspaceGlobs, stripYamlComment, vendoredSubprojects } from '../../src/imports/vendored.js';
 import type { Manifest } from '../../src/imports/manifest.js';
 import { ambientModulePatterns, specifierResolver } from '../../src/imports/resolve.js';
 import { analyzeImports, importFindings } from '../../src/imports/analyze.js';
@@ -695,19 +695,19 @@ describe('vendoredSubprojects', () => {
   it('retient un sous-projet que personne n’importe', () => {
     const root = makeRoot(VENDOR);
     const sources = makeProject({ 'src/app.ts': "import './other.js';\n", 'src/vendor/index.ts': '' });
-    expect(vendoredSubprojects(root, subprojectDirs(root, files), sources)).toEqual(['src/vendor']);
+    expect(vendoredSubprojects(root, subprojectDirs(root, files), sources).dirs).toEqual(['src/vendor']);
   });
 
   it('écarte un sous-projet importé par un fichier du dépôt', () => {
     const root = makeRoot(VENDOR);
     const sources = makeProject({ 'src/app.ts': "import './vendor/index.js';\n", 'src/vendor/index.ts': '' });
-    expect(vendoredSubprojects(root, subprojectDirs(root, files), sources)).toEqual([]);
+    expect(vendoredSubprojects(root, subprojectDirs(root, files), sources).dirs).toEqual([]);
   });
 
   it('écarte un sous-projet importé par le nom de paquet qu’il déclare', () => {
     const root = makeRoot(VENDOR);
     const sources = makeProject({ 'src/app.ts': "import 'scraper/lib';\n", 'src/vendor/index.ts': '' });
-    expect(vendoredSubprojects(root, subprojectDirs(root, files), sources)).toEqual([]);
+    expect(vendoredSubprojects(root, subprojectDirs(root, files), sources).dirs).toEqual([]);
   });
 
   it('ne compte pas un import venu de l’intérieur du sous-projet', () => {
@@ -717,16 +717,34 @@ describe('vendoredSubprojects', () => {
       'src/vendor/index.ts': "import './util.js';\n",
       'src/vendor/util.ts': '',
     });
-    expect(vendoredSubprojects(root, subprojectDirs(root, [...files, 'src/vendor/util.ts']), sources))
+    expect(vendoredSubprojects(root, subprojectDirs(root, [...files, 'src/vendor/util.ts']), sources).dirs)
       .toEqual(['src/vendor']);
   });
 
   it('respecte un espace de travail déclaré, package.json comme pnpm', () => {
     const sources = makeProject({ 'src/app.ts': '', 'src/vendor/index.ts': '' });
     const npm = makeRoot({ ...VENDOR, 'package.json': JSON.stringify({ name: 'root', workspaces: ['src/*'] }) });
-    expect(vendoredSubprojects(npm, subprojectDirs(npm, files), sources)).toEqual([]);
-    const pnpm = makeRoot({ ...VENDOR, 'pnpm-workspace.yaml': 'packages:\n  - \'src/vendor\'\n' });
-    expect(vendoredSubprojects(pnpm, subprojectDirs(pnpm, files), sources)).toEqual([]);
+    expect(vendoredSubprojects(npm, subprojectDirs(npm, files), sources).dirs).toEqual([]);
+    const yarn = makeRoot({
+      ...VENDOR,
+      'package.json': JSON.stringify({ name: 'root', workspaces: { packages: ['src/vendor'] } }),
+    });
+    expect(vendoredSubprojects(yarn, subprojectDirs(yarn, files), sources).dirs).toEqual([]);
+    const pnpm = makeRoot({ ...VENDOR, 'pnpm-workspace.yaml': 'packages:\n  - \'src/vendor\' # le scraper\n' });
+    expect(vendoredSubprojects(pnpm, subprojectDirs(pnpm, files), sources).dirs).toEqual([]);
+    const flow = makeRoot({ ...VENDOR, 'pnpm-workspace.yaml': 'packages: [\n  "src/*",\n]\n' });
+    expect(vendoredSubprojects(flow, subprojectDirs(flow, files), sources).dirs).toEqual([]);
+  });
+
+  it('n’écarte rien et dit pourquoi quand la déclaration est illisible', () => {
+    const sources = makeProject({ 'src/app.ts': '', 'src/vendor/index.ts': '' });
+    const root = makeRoot({ ...VENDOR, 'pnpm-workspace.yaml': 'packages: [\n  "src/*",\n' });
+    const scan = vendoredSubprojects(root, subprojectDirs(root, files), sources);
+    expect(scan.dirs).toEqual([]);
+    expect(scan.unreadableReason).toMatch(/séquence packages non fermée/);
+    const broken = makeRoot({ ...VENDOR, 'package.json': '{ "name": "root", ' });
+    expect(vendoredSubprojects(broken, subprojectDirs(broken, files), sources).unreadableReason)
+      .toMatch(/package\.json illisible/);
   });
 
   it('ignore un package.json marqueur de format, qui n’est pas un sous-projet', () => {
@@ -737,7 +755,7 @@ describe('vendoredSubprojects', () => {
       'src/app.ts': '',
     });
     const sources = makeProject({ 'src/app.ts': '', 'src/esm/worker.ts': '' });
-    expect(vendoredSubprojects(root, subprojectDirs(root, ['src/app.ts', 'src/esm/worker.ts']), sources))
+    expect(vendoredSubprojects(root, subprojectDirs(root, ['src/app.ts', 'src/esm/worker.ts']), sources).dirs)
       .toEqual([]);
   });
 });
@@ -745,11 +763,36 @@ describe('vendoredSubprojects', () => {
 describe('pnpmWorkspaceGlobs', () => {
   it('lit la forme bloc, en ignorant commentaires et lignes vides', () => {
     const raw = 'packages:\n  # les apps\n  - \'apps/*\'\n  - packages/**\n\nonlyBuiltDependencies:\n  - esbuild\n';
-    expect(pnpmWorkspaceGlobs(raw)).toEqual(['apps/*', 'packages/**']);
+    expect(pnpmWorkspaceGlobs(raw)).toEqual({ globs: ['apps/*', 'packages/**'] });
   });
 
-  it('lit la forme en ligne et rend une liste vide sans champ packages', () => {
-    expect(pnpmWorkspaceGlobs('packages: ["apps/*", \'libs/*\']')).toEqual(['apps/*', 'libs/*']);
-    expect(pnpmWorkspaceGlobs('onlyBuiltDependencies:\n  - esbuild\n')).toEqual([]);
+  it('retire le commentaire de fin d’item sans toucher au glob', () => {
+    expect(pnpmWorkspaceGlobs('packages:\n  - \'apps/*\' # le site\n  - libs/** # et les libs\n'))
+      .toEqual({ globs: ['apps/*', 'libs/**'] });
+    expect(pnpmWorkspaceGlobs('packages:\n  - \'apps/#tag/*\'\n')).toEqual({ globs: ['apps/#tag/*'] });
+  });
+
+  it('lit la séquence de flux sur une ligne comme sur plusieurs', () => {
+    expect(pnpmWorkspaceGlobs('packages: ["apps/*", \'libs/*\']')).toEqual({ globs: ['apps/*', 'libs/*'] });
+    expect(pnpmWorkspaceGlobs('packages: [\n  "apps/*", # le site\n  \'libs/*\',\n]\nonlyBuilt: []\n'))
+      .toEqual({ globs: ['apps/*', 'libs/*'] });
+  });
+
+  it('rend une liste vide sans champ packages, et signale ce qu’il ne sait pas lire', () => {
+    expect(pnpmWorkspaceGlobs('onlyBuiltDependencies:\n  - esbuild\n')).toEqual({ globs: [] });
+    expect(pnpmWorkspaceGlobs('packages: [\n  "apps/*",\n').unreadable).toMatch(/non fermée/);
+    expect(pnpmWorkspaceGlobs('packages: *ancre\n').unreadable).toMatch(/forme inconnue/);
+    // Un item qui n'est pas un scalaire donnerait un glob qui ne matche rien, donc un espace
+    // de travail écarté en silence : refusé.
+    expect(pnpmWorkspaceGlobs('packages:\n  - path: apps/*\n').unreadable).toMatch(/forme inconnue/);
+  });
+});
+
+describe('stripYamlComment', () => {
+  it('coupe au dièse hors guillemets, précédé d’une espace ou en tête de ligne', () => {
+    expect(stripYamlComment('  - \'apps/*\' # le site')).toBe('  - \'apps/*\' ');
+    expect(stripYamlComment('# tout est commentaire')).toBe('');
+    expect(stripYamlComment('  - "a#b"')).toBe('  - "a#b"');
+    expect(stripYamlComment('  - apps/*')).toBe('  - apps/*');
   });
 });
