@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Project } from 'ts-morph';
 import type { SourceFile } from 'ts-morph';
-import { localUsageLookup, usesSymbolLocally } from '../../src/imports/local-usage.js';
+import { exportOrigin, exportOriginLookup, usesSymbolLocally } from '../../src/imports/local-usage.js';
 
 function sourceOf(content: string, name = 'src/a.ts'): SourceFile {
   const project = new Project({ useInMemoryFileSystem: true, skipAddingFilesFromTsConfig: true });
@@ -58,12 +58,43 @@ describe('usesSymbolLocally', () => {
   });
 });
 
-describe('localUsageLookup', () => {
-  it('rend false pour un fichier absent du périmètre et mémorise les réponses', () => {
+describe('exportOrigin', () => {
+  it('reconnaît un ré-export nommé, aliasé ou en espace de noms', () => {
+    const source = sourceOf([
+      "export { relayé } from './y.js';",
+      "export { origine as renommé } from './z.js';",
+      "export * as espace from './w.js';",
+    ].join('\n'));
+    expect(exportOrigin(source, 'relayé')).toBe('reexport');
+    expect(exportOrigin(source, 'renommé')).toBe('reexport');
+    expect(exportOrigin(source, 'espace')).toBe('reexport');
+    // Le nom d'origine d'un alias n'est pas exporté par ce fichier.
+    expect(exportOrigin(source, 'origine')).toBe('dead');
+  });
+
+  it('impute à un `export * from` un nom que le fichier n’écrit nulle part', () => {
+    const source = sourceOf("export * from './y.js';\nexport const propre = 1;\n");
+    expect(exportOrigin(source, 'venuDAilleurs')).toBe('reexport');
+    expect(exportOrigin(source, 'propre')).toBe('dead');
+  });
+
+  it('distingue l’usage local du code mort', () => {
+    const source = sourceOf([
+      'export const TABLE = [1, 2];',
+      'export const somme = TABLE.length;',
+      'export const mort = 3;',
+    ].join('\n'));
+    expect(exportOrigin(source, 'TABLE')).toBe('local-usage');
+    expect(exportOrigin(source, 'mort')).toBe('dead');
+  });
+});
+
+describe('exportOriginLookup', () => {
+  it('rend `dead` pour un fichier absent du périmètre et mémorise les réponses', () => {
     const sources = new Map([['src/a.ts', sourceOf('export const x = 1;\nconsole.log(x);\n')]]);
-    const lookup = localUsageLookup(sources);
-    expect(lookup('src/a.ts', 'x')).toBe(true);
-    expect(lookup('src/a.ts', 'x')).toBe(true);
-    expect(lookup('src/inconnu.ts', 'x')).toBe(false);
+    const lookup = exportOriginLookup(sources);
+    expect(lookup('src/a.ts', 'x')).toBe('local-usage');
+    expect(lookup('src/a.ts', 'x')).toBe('local-usage');
+    expect(lookup('src/inconnu.ts', 'x')).toBe('dead');
   });
 });

@@ -16,6 +16,8 @@ import { isRuleEnabled } from '../core/config.js';
 import type { RuleSwitches } from '../core/config.js';
 import { compareFindings, envelope, makeFinding } from '../core/findings.js';
 import type { DeadCodeReport, DeadCodeSummary, Finding, Severity } from '../core/types.js';
+// Type seul : l'adaptateur ne doit pas charger ts-morph, que le chemin rapide paie déjà.
+import type { ExportOrigin } from '../imports/local-usage.js';
 import { declaredEntries, isBinaryOnlyPackage } from './knip-entries.js';
 import type { DeclaredEntries } from './knip-entries.js';
 import { parseJsonOutput, runTool } from './run.js';
@@ -31,17 +33,36 @@ const ISSUE_KINDS = [
 ] as const satisfies ReadonlyArray<{ key: string; rule: string; label: string; severity: Severity }>;
 
 /**
- * knip range sous le même verdict le symbole mort et celui qui sert dans son propre fichier,
- * où seul le mot-clé `export` est en trop. Le second se corrige en retirant un mot, pas en
- * supprimant du code : sur 32 alertes vérifiées à la main, 19 étaient de cette forme et
- * aucune n'a été jugée utile à corriger. Deux règles, deux sévérités, deux gestes.
+ * knip range sous un seul verdict trois situations qui n'appellent pas le même geste, et
+ * son message laisse croire à la plus grave des trois.
+ *
+ * - le symbole sert dans son propre fichier : seul le mot-clé `export` est en trop. Sur 32
+ *   alertes vérifiées à la main, 19 étaient de cette forme et aucune n'a été jugée utile à
+ *   corriger, d'où une règle à part, mineure et désactivée par défaut ;
+ * - le symbole est réexporté d'un autre module : il y vit toujours, seule la ligne est
+ *   retirable. 44 des 250 alertes restantes, soit 18 %, dire « supprimable » y est faux ;
+ * - le symbole n'est nulle part : c'est du code mort, et là seulement il est supprimable.
  */
-const SUPERFLUOUS_EXPORT = {
-  key: 'exports',
-  rule: 'superfluous-export',
-  label: 'exporté sans importeur, l\'export peut être retiré',
-  severity: 'minor',
-} as const;
+const EXPORT_KINDS = {
+  'local-usage': {
+    key: 'exports',
+    rule: 'superfluous-export',
+    label: 'exporté sans importeur, l\'export peut être retiré',
+    severity: 'minor',
+  },
+  reexport: {
+    key: 'exports',
+    rule: 'unused-export',
+    label: 'ré-export jamais importé, la ligne peut être retirée',
+    severity: 'major',
+  },
+  dead: {
+    key: 'exports',
+    rule: 'unused-export',
+    label: 'symbole mort, supprimable',
+    severity: 'major',
+  },
+} as const satisfies Record<ExportOrigin, { key: string; rule: string; label: string; severity: Severity }>;
 
 interface KnipEntry {
   name?: unknown;
@@ -87,19 +108,20 @@ function isScopeManifest(file: string, files: readonly string[]): boolean {
   return files.some((scoped) => dir === '.' || scoped.startsWith(`${dir}/`));
 }
 
-type IssueKind = (typeof ISSUE_KINDS)[number] | typeof SUPERFLUOUS_EXPORT;
+type IssueKind = (typeof ISSUE_KINDS)[number] | (typeof EXPORT_KINDS)[ExportOrigin];
 
 /** Ce que le mapping ne peut pas lire dans la sortie de knip : le disque et l'AST. */
 export interface KnipMapOptions {
   /** true si ce paquet n'expose qu'un binaire : il n'est jamais importé, donc jamais « inutilisé ». */
   isBinaryOnly?: (manifestDir: string, packageName: string) => boolean;
-  /** true si le symbole exporté sert dans son propre fichier : l'export est superflu, pas mort. */
-  usedInOwnFile?: (file: string, symbol: string) => boolean;
+  /** Usage local, ré-export ou code mort : ce que coûte vraiment un export sans importeur. */
+  exportOrigin?: (file: string, symbol: string) => ExportOrigin;
 }
 
+/** Sans lecture de l'AST, un export sans importeur est traité comme du code mort, comme le fait knip. */
 function variantOf(file: string, kind: IssueKind, name: string, options: KnipMapOptions): IssueKind {
   if (kind.key !== 'exports') return kind;
-  return options.usedInOwnFile?.(file, name) === true ? SUPERFLUOUS_EXPORT : kind;
+  return EXPORT_KINDS[options.exportOrigin?.(file, name) ?? 'dead'];
 }
 
 function entryFinding(file: string, kind: IssueKind, entry: KnipEntry, options: KnipMapOptions): Finding {
@@ -152,7 +174,7 @@ function readFindings(parsed: unknown, kinds: readonly IssueKind[], options: Kni
  */
 function enabledKinds(rules: RuleSwitches): IssueKind[] {
   return ISSUE_KINDS.filter((kind) => kind.key === 'exports'
-    ? isRuleEnabled(rules, kind.rule) || isRuleEnabled(rules, SUPERFLUOUS_EXPORT.rule)
+    ? isRuleEnabled(rules, kind.rule) || isRuleEnabled(rules, EXPORT_KINDS['local-usage'].rule)
     : isRuleEnabled(rules, kind.rule));
 }
 
