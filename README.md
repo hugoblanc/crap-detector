@@ -69,9 +69,10 @@ C'est la contrainte qui structure tout le code.
   Environ 200 ms de bout en bout, dont l'essentiel est le démarrage de Node.
   C'est ce qui le rend utilisable depuis un hook déclenché à chaque édition.
   Une exception, assumée : un specifier ni déclaré ni résolu déclenche le balayage des
-  déclarations ambiantes des paquets installés, de 46 à 271 ms selon la taille du dépôt,
-  payé une fois par manifeste. C'est le cas nominal juste après qu'un agent a inventé un
-  paquet, et c'est le prix à payer pour ne pas crier au loup.
+  déclarations ambiantes des paquets installés, de 6 à 65 ms selon le dépôt, payé une fois
+  par manifeste. Sur le seul fichier des cinq dépôts mesurés qui le déclenche, l'appel passe
+  de 200 à 246 ms, médianes de 8 exécutions entrelacées. C'est le cas nominal juste après
+  qu'un agent a inventé un paquet, et c'est le prix à payer pour ne pas crier au loup.
 - **`scan`, `check`, `baseline`** ajoutent git, `knip` et `jscpd`, chargés par
   `import()` dynamique. Un import statique tirerait `knip` — plusieurs mégaoctets — dans
   chaque invocation, y compris celle du chemin rapide.
@@ -188,7 +189,7 @@ Le seuil se relève dans `crap-detector.json`, par exemple `"knip": { "maxUnused
 ## Règles par défaut
 
 Sur cinq dépôts TypeScript réels, 699 alertes vérifiées à la main étaient exactes à 89 %, mais utiles à 30 % seulement ([détail](docs/PRECISION-2026-09.md)).
-Six règles exactes mais presque jamais utiles sont donc désactivées par défaut :
+Sept règles exactes mais presque jamais utiles sont donc désactivées par défaut :
 
 | Règle | Alertes utiles |
 | --- | --- |

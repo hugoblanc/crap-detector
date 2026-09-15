@@ -94,6 +94,10 @@ function typesEntry(dir: string, parsed: Record<string, unknown>): string | unde
  * un seul paquet installé qui le publie, fût-ce une dépendance transitive que
  * l'utilisateur n'a pas choisie, éteindrait la seule règle critique du produit pour
  * tout le manifeste. Un motif doit porter un préfixe ou un suffixe qui le restreint.
+ *
+ * Limite connue de cette garde : un seul caractère lui suffit, donc `declare module '@*'`
+ * blanchit tous les paquets scopés. Aucune occurrence réelle sur les dépôts mesurés, et
+ * exiger davantage écarterait des motifs légitimes comme `*.svg`.
  */
 function isRestrictive(pattern: string): boolean {
   const star = pattern.indexOf('*');
@@ -102,19 +106,43 @@ function isRestrictive(pattern: string): boolean {
 }
 
 /**
- * Lu sur l'AST, pas sur le texte : `declare module '*'` écrit dans un exemple de JSDoc
- * n'est pas une déclaration, et une expression régulière sur le source ne fait pas la
- * différence. Le fichier n'est analysé que s'il contient les deux mots-clés, sans quoi
- * la centaine de fichiers de déclarations d'un dépôt réel serait parsée pour rien.
+ * Occurrences qui ressemblent à une déclaration de module ambiant. `declare` est optionnel
+ * dans un fichier de déclarations, où `module 'x' { … }` est valide : la forme courte est
+ * reconnue comme candidate, pour ne pas rater la déclaration, mais jamais crue sur parole,
+ * elle part à l'arbitrage de l'AST. Cas d'école, aucune occurrence sur les dépôts mesurés.
  */
-function declaredModulesIn(path: string): string[] {
-  let content: string;
-  try {
-    content = readFileSync(path, 'utf8');
-  } catch {
-    return [];
+const DECLARE_MODULE = /(?:declare\s+)?module\s+['"]([^'"]+)['"]/g;
+
+function occurrences(content: string, needle: string): number {
+  return content.split(needle).length - 1;
+}
+
+/**
+ * true si au moins un candidat n'est pas sûrement du code : forme courte sans `declare`, ou
+ * occurrence prise dans un commentaire de ligne ou de bloc. Un seul parcours pour tous les
+ * candidats, qui arrivent dans l'ordre : un fichier de déclarations en porte jusqu'à
+ * plusieurs milliers, et les compter chacun depuis le début du fichier serait quadratique.
+ *
+ * Sur-approximé sans risque : un `//` ou un `/*` dans une chaîne de caractères fait conclure
+ * au commentaire, ce qui ne coûte qu'un passage par l'AST, lui exact.
+ */
+function needsArbitration(content: string, candidates: RegExpExecArray[]): boolean {
+  let cursor = 0;
+  let depth = 0;
+  for (const candidate of candidates) {
+    const index = candidate.index;
+    const segment = content.slice(cursor, index);
+    depth += occurrences(segment, '/*') - occurrences(segment, '*/');
+    cursor = index;
+    if (depth > 0 || !candidate[0].startsWith('declare')) return true;
+    const slashes = content.indexOf('//', content.lastIndexOf('\n', index) + 1);
+    if (slashes !== -1 && slashes < index) return true;
   }
-  if (!content.includes('declare') || !content.includes('module')) return [];
+  return false;
+}
+
+/** Déclarations de modules ambiants du fichier, lues sur l'AST : la seule lecture exacte. */
+function parsedModulesIn(path: string, content: string): string[] {
   const source = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
   const names: string[] = [];
   for (const statement of source.statements) {
@@ -123,6 +151,27 @@ function declaredModulesIn(path: string): string[] {
     }
   }
   return names;
+}
+
+/**
+ * Lecture en deux temps. L'expression régulière ne sert qu'à trouver les candidats : sans
+ * candidat, le fichier n'est pas parsé, et c'est le cas de la grande majorité des fichiers
+ * de déclarations d'un dépôt réel. L'AST, quatre fois plus cher, n'arbitre que les fichiers
+ * où un candidat pourrait ne pas être du code : `declare module '*'` dans un bloc `@example`
+ * existe pour de vrai, deux fois dans les dépendances des dépôts mesurés.
+ */
+function declaredModulesIn(path: string): string[] {
+  let content: string;
+  try {
+    content = readFileSync(path, 'utf8');
+  } catch {
+    return [];
+  }
+  const candidates = [...content.matchAll(DECLARE_MODULE)];
+  if (candidates.length === 0) return [];
+  return needsArbitration(content, candidates)
+    ? parsedModulesIn(path, content)
+    : candidates.map((candidate) => candidate[1] ?? '');
 }
 
 /**

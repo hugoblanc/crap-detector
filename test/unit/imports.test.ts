@@ -406,6 +406,14 @@ describe('ambientModulePatterns', () => {
     expect(ambientModulePatterns(root, base)).toEqual(['@vrai/Alias']);
   });
 
+  it('arbitre sur l’AST la forme courte, sans `declare`, valide dans un fichier de déclarations', () => {
+    const root = makeRoot({
+      'node_modules/racine/package.json': '{"name":"racine","types":"index.d.ts"}',
+      'node_modules/racine/index.d.ts': "module '@court/Alias' {}\nconst texte = \"module 'faux/Positif'\";\n",
+    });
+    expect(ambientModulePatterns(root, base)).toEqual(['@court/Alias']);
+  });
+
   it('écarte un motif qui couvrirait n’importe quel specifier', () => {
     const root = makeRoot({
       'node_modules/racine/package.json': '{"name":"racine","types":"index.d.ts"}',
