@@ -44,6 +44,12 @@ export interface JscpdMapping {
 export interface JscpdScope {
   root: string;
   files: readonly string[];
+  /**
+   * Dossiers vendorisés, présents dans `files`. Un clone est une relation entre deux fichiers :
+   * retirer le côté vendorisé de l'entrée de jscpd effacerait le défaut du côté vivant, qui est
+   * précisément la copie à supprimer. Ils sont donc mesurés, mais ne portent jamais de finding.
+   */
+  vendored?: readonly string[];
 }
 
 function sideOf(raw: unknown, root: string): CloneSide | undefined {
@@ -115,15 +121,32 @@ function cloneFinding(clone: Clone, threshold: number): Finding {
   });
 }
 
+/**
+ * Clones portés par un fichier mesuré : ceux dont les deux côtés sont vendorisés disparaissent,
+ * ceux dont seul le premier côté l'est sont retournés pour être signalés sur le côté vivant.
+ * Lequel des deux côtés jscpd nomme en premier est arbitraire : il groupe les copies autour de
+ * la première rencontrée.
+ */
+function anchoredOnMeasured(clones: Clone[], vendored: readonly string[]): Clone[] {
+  if (vendored.length === 0) return clones;
+  const isVendored = (file: string): boolean => vendored.some((dir) => file.startsWith(`${dir}/`));
+  return clones
+    .filter((clone) => !isVendored(clone.first.file) || !isVendored(clone.second.file))
+    .map((clone) => (isVendored(clone.first.file)
+      ? { first: clone.second, second: clone.first, lines: clone.lines }
+      : clone));
+}
+
 /** Un clone ne compte que si ses deux côtés sont des fichiers du périmètre. */
 export function mapJscpdReport(parsed: unknown, threshold: number, scope: JscpdScope): JscpdMapping {
   const inScope = new Set(scope.files);
   const all = readClones(parsed, scope.root);
   const clones = all.filter((clone) => inScope.has(clone.first.file) && inScope.has(clone.second.file));
+  const reported = anchoredOnMeasured(clones, scope.vendored ?? []);
   return {
     statistics: readStatistics(parsed),
     clones,
-    findings: clones.map((clone) => cloneFinding(clone, threshold)).sort(compareFindings),
+    findings: reported.map((clone) => cloneFinding(clone, threshold)).sort(compareFindings),
     cloneLines: coveredLines(clones),
     outOfScope: all.length - clones.length,
   };
@@ -207,8 +230,15 @@ function jscpdArgs(outputDir: string, root: string, files: readonly string[]): s
   ];
 }
 
-/** `files` : fichiers du périmètre, relatifs à rootPath, tels que rendus par collectFiles. */
-export function analyzeDuplication(rootPath: string, files: readonly string[]): DuplicationAnalysis {
+/**
+ * `files` : fichiers du périmètre, relatifs à rootPath, tels que rendus par collectFiles, plus
+ * ceux des sous-projets vendorisés — `vendored` donne leurs dossiers.
+ */
+export function analyzeDuplication(
+  rootPath: string,
+  files: readonly string[],
+  vendored: readonly string[] = [],
+): DuplicationAnalysis {
   // Sans chemin, jscpd analyse son répertoire courant : tout le dépôt.
   if (files.length === 0) return unavailable(rootPath, 'inconnue', 'aucun fichier dans le périmètre');
   const root = realpathSync(rootPath);
@@ -219,7 +249,7 @@ export function analyzeDuplication(rootPath: string, files: readonly string[]): 
     let mapping: JscpdMapping;
     try {
       const raw = readFileSync(join(outputDir, 'jscpd-report.json'), 'utf8');
-      mapping = mapJscpdReport(JSON.parse(raw), MIN_CLONE_LINES, { root, files });
+      mapping = mapJscpdReport(JSON.parse(raw), MIN_CLONE_LINES, { root, files, vendored });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return unavailable(rootPath, result.version, `rapport jscpd illisible : ${message}`);

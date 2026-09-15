@@ -10,9 +10,9 @@ import { compareFindings, envelope } from '../core/findings.js';
 import { enabledOptionalRules } from '../core/config.js';
 import type { ResolvedConfig } from '../core/config.js';
 import type { ReportScope } from '../core/scope.js';
-import type { AggregateKey, Aggregates, DeadCodeReport, ScanReport } from '../core/types.js';
+import type { AggregateKey, Aggregates, DeadCodeReport, Finding, ScanReport } from '../core/types.js';
 import type { GitIgnoredResult } from '../churn/git.js';
-import { manifestResolver, subprojectDirs } from '../imports/manifest.js';
+import { manifestResolver } from '../imports/manifest.js';
 import { summarizeSlop } from '../slop/analyze.js';
 import { scanFast } from './fast.js';
 import type { FastScan } from './fast.js';
@@ -41,7 +41,7 @@ export async function scanFull(
     ...envelope(rootPath, 'ts-morph'),
     filesScanned: fast.files.length,
     thresholds: config.thresholds,
-    scope: reportScope(config, ignored, subprojectDirs(rootPath, fast.files)),
+    scope: reportScope(config, ignored, fast),
     metrics: fast.metrics,
     slop: fast.slop,
     imports: fast.imports,
@@ -117,15 +117,21 @@ async function addExternalTools(rootPath: string, fast: FastScan, report: ScanRe
       aggregates['deadcode.exports.count'] = deadCode.summary.unusedExports;
       aggregates['deadcode.files.count'] = deadCode.summary.unusedFiles;
     }
-    findings.push(...deadCode.findings);
+    report.findings = withoutDeadFileMetrics([...findings, ...deadCode.findings], deadCode.findings);
   }
 
-  const duplication = analyzeDuplication(rootPath, fast.files);
+  // jscpd mesure aussi les fichiers vendorisés : sans eux, la copie qu'un fichier vivant en fait
+  // ne se voit plus. Ils ne portent aucun finding, cf. anchoredOnMeasured dans l'adaptateur.
+  const duplication = analyzeDuplication(
+    rootPath,
+    [...fast.files, ...fast.vendoredFiles].sort(),
+    fast.vendored,
+  );
   report.duplication = duplication.report;
   if (!duplication.report.available) return;
   aggregates['duplication.percent'] = duplication.report.statistics.percent;
   aggregates['duplication.lines'] = duplication.report.statistics.duplicatedLines;
-  findings.push(...duplication.report.findings);
+  report.findings.push(...duplication.report.findings);
   // Les lignes clonées entrent dans la verbosité : le score AST seul la sous-estime.
   const summary = summarizeSlop(fast.slopHits, fast.sourceFiles, { cloneLines: duplication.cloneLines });
   report.slop = { ...fast.slop, summary };
@@ -146,6 +152,21 @@ export function withoutNativeDuplicates(rootPath: string, files: readonly string
   const findings = deadCode.findings.filter((finding) => finding.rule !== 'unlisted-dependency'
     || !judged.has(finding.file) || !manifestFor(finding.file).trustworthy);
   return { ...deadCode, findings };
+}
+
+/**
+ * Un fichier que knip classe `unused-file` est à supprimer, pas à refactorer : sa complexité, sa
+ * longueur, son imbrication et son slop ne disent rien de plus que l'unused-file, et demandent
+ * l'inverse du bon correctif. Même principe que withoutNativeDuplicates : un seul finding par cause.
+ *
+ * Seul l'outil `metrics` (métriques AST et règles de slop) est écarté. Un paquet non déclaré
+ * (`imports`) reste un vrai correctif à faire au package.json même dans un fichier mort, et les
+ * clones (`jscpd`) ont un second côté vivant que leur agrégat compte de toute façon.
+ */
+export function withoutDeadFileMetrics(findings: readonly Finding[], deadCode: readonly Finding[]): Finding[] {
+  const dead = new Set(deadCode.filter((finding) => finding.rule === 'unused-file').map((finding) => finding.file));
+  if (dead.size === 0) return [...findings];
+  return findings.filter((finding) => finding.tool !== 'metrics' || !dead.has(finding.file));
 }
 
 /** La masse érodée est incluse dans la masse totale : erosion.fraction ne peut pas dépasser 1. */
@@ -180,7 +201,7 @@ async function readIgnored(rootPath: string): Promise<GitIgnoredResult> {
   return readGitIgnored(rootPath);
 }
 
-function reportScope(config: ResolvedConfig, ignored: GitIgnoredResult, subprojects: string[]): ReportScope {
+function reportScope(config: ResolvedConfig, ignored: GitIgnoredResult, fast: FastScan): ReportScope {
   const scope: ReportScope = {
     include: [...config.scope.include],
     exclude: [...config.scope.exclude],
@@ -188,7 +209,8 @@ function reportScope(config: ResolvedConfig, ignored: GitIgnoredResult, subproje
     toolsScoped: true,
     importRules: 3,
     rules: enabledOptionalRules(config.rules),
-    subprojects,
+    vendored: [...fast.vendored],
+    subprojects: [...fast.subprojects],
   };
   if (ignored.reason !== undefined) scope.gitignoreUnavailableReason = ignored.reason;
   return scope;

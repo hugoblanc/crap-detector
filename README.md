@@ -134,15 +134,24 @@ Les orphelins ne sont comptés que si knip n'a pas tourné (`--no-tools`, ou kni
 Les tests restent hors mesure mais comptent alors comme importeurs : un module utilisé seulement par ses tests n'est pas orphelin.
 
 **Code mort et duplication**, via `knip` et `jscpd`, sur le même périmètre que l'analyse AST.
-`jscpd` ne reçoit que les fichiers du périmètre, et garde la config du dépôt (`.jscpd.json` ou clé `jscpd` du `package.json`), sauf `exitCode` et `threshold`.
+`jscpd` ne reçoit que les fichiers du périmètre, plus ceux des sous-projets vendorisés, et garde la config du dépôt (`.jscpd.json` ou clé `jscpd` du `package.json`), sauf `exitCode` et `threshold`.
 `knip` lit tout le projet, pour que les tests, les points d'entrée et les conventions de framework comptent comme importeurs.
 Seuls ses findings sur les fichiers du périmètre sont gardés, avec les dépendances du `package.json` qui les gouverne.
 Le résumé dit combien de findings ont été écartés comme hors périmètre.
 
 `unused-file`, `unused-export` et `unused-dependency` ne valent que ce que knip sait des points d'entrée : voir [Configurer knip](#configurer-knip).
 
+Un fichier que knip classe `unused-file` est à supprimer, pas à refactorer : ses alertes de métriques et de slop sont écartées du rapport, un seul finding par cause.
+Son paquet non déclaré et ses blocs dupliqués restent, eux : ils demandent un autre correctif, au `package.json` ou au fichier vivant qui porte la copie.
+
 **Monorepo.** knip lancé depuis la racine d'un dépôt dont les workspaces ne sont pas déclarés juge tout contre la racine : sur un monorepo pnpm sans `packages` dans `pnpm-workspace.yaml`, il a signalé comme inutilisés des centaines de fichiers d'un sous-projet Vite, contre quelques-uns lancé depuis le dossier du sous-projet.
 Quand des sous-dossiers du périmètre ont leur propre `package.json`, le résumé les liste : scanner chacun séparément avec `--root <dossier>`.
+
+**Sous-projet vendorisé.** Un de ces sous-dossiers qu'aucun fichier du dépôt n'importe, et que la racine ne déclare pas comme espace de travail (`workspaces` du `package.json`, `packages` du `pnpm-workspace.yaml`), est du code tiers embarqué : il sort du périmètre, et le résumé dit lesquels.
+Le mesurer gonflerait les agrégats et la baseline sans qu'aucune décision ne s'ensuive, puisque la seule action possible est de le supprimer en bloc.
+Les trois conditions se croisent toujours : un `package.json` réduit à `{"type": "module"}` règle le format des modules d'un dossier sans en faire un projet, et un dossier importé de l'extérieur est du code du projet quel que soit son manifeste.
+`jscpd` continue de lire ses fichiers, sans jamais y poser de finding : un clone est une relation entre deux fichiers, et le retirer effacerait la copie que le code vivant en fait, qui est justement la raison de le supprimer.
+Le champ `scope.vendored` de la baseline enregistre la liste : elle change, la baseline est déclarée incomparable plutôt que de faire passer la dette du sous-projet pour corrigée.
 
 **Contre-mesures au gaming.** `functionsPerFile` et `medianFunctionSloc` : un agent qui
 saucissonne pour passer sous un seuil fait monter le premier et chuter le second.

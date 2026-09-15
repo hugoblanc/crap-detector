@@ -95,16 +95,34 @@ function orphanCount(value: number | undefined): string {
   return value === undefined ? 'orphelins couverts par knip (fichiers inutilisés)' : `${String(value)} orphelins`;
 }
 
-/** Depuis la racine, knip et le graphe lisent mal un sous-projet qui a ses propres dépendances. */
+/** Liste tronquée à cinq entrées, pour une note tenant sur une ligne. */
+function listed(dirs: string[]): string {
+  const more = dirs.length > 5 ? ` et ${String(dirs.length - 5)} autres` : '';
+  return `${dirs.slice(0, 5).join(', ')}${more}`;
+}
+
+/**
+ * Depuis la racine, knip et le graphe lisent mal un sous-projet qui a ses propres dépendances.
+ * Celui que personne n'importe est sorti du périmètre : le dire, sinon ses fichiers manquent
+ * au compte sans explication.
+ */
 function subprojectNote(report: ScanReport): string[] {
-  const { subprojects } = report.scope;
-  if (subprojects.length === 0) return [];
-  const shown = subprojects.slice(0, 5).join(', ');
-  const more = subprojects.length > 5 ? ` et ${String(subprojects.length - 5)} autres` : '';
-  return [
-    `sous-projets ${shown}${more} ont leur propre package.json : `
-      + 'scanner chacun avec --root <dossier> pour des résultats fiables',
-  ];
+  const { subprojects, vendored } = report.scope;
+  const measured = subprojects.filter((dir) => !vendored.includes(dir));
+  const notes: string[] = [];
+  if (vendored.length > 0) {
+    notes.push(
+      `sous-projets ${listed(vendored)} écartés du périmètre : leur propre package.json, `
+        + 'aucun importeur, pas un espace de travail déclaré. Du code tiers embarqué se supprime, il ne se refactore pas',
+    );
+  }
+  if (measured.length > 0) {
+    notes.push(
+      `sous-projets ${listed(measured)} ont leur propre package.json : `
+        + 'scanner chacun avec --root <dossier> pour des résultats fiables',
+    );
+  }
+  return notes;
 }
 
 /**

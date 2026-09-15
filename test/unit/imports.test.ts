@@ -21,7 +21,9 @@ import {
   isDeclared,
   matchesAliasPattern,
   readManifest,
+  subprojectDirs,
 } from '../../src/imports/manifest.js';
+import { pnpmWorkspaceGlobs, vendoredSubprojects } from '../../src/imports/vendored.js';
 import type { Manifest } from '../../src/imports/manifest.js';
 import { ambientModulePatterns, specifierResolver } from '../../src/imports/resolve.js';
 import { analyzeImports, importFindings } from '../../src/imports/analyze.js';
@@ -678,5 +680,76 @@ describe('analyzeImports', () => {
     expect(report.manifestTrusted).toBe(false);
     expect(report.manifestReason).toMatch(/package\.json/);
     expect(report.findings).toEqual([]);
+  });
+});
+
+describe('vendoredSubprojects', () => {
+  const VENDOR = {
+    'package.json': JSON.stringify({ name: 'root', dependencies: {} }),
+    'src/vendor/package.json': JSON.stringify({ name: 'scraper', dependencies: { axios: '1.0.0' } }),
+    'src/vendor/index.ts': '',
+    'src/app.ts': '',
+  };
+  const files = ['src/app.ts', 'src/vendor/index.ts'];
+
+  it('retient un sous-projet que personne n’importe', () => {
+    const root = makeRoot(VENDOR);
+    const sources = makeProject({ 'src/app.ts': "import './other.js';\n", 'src/vendor/index.ts': '' });
+    expect(vendoredSubprojects(root, subprojectDirs(root, files), sources)).toEqual(['src/vendor']);
+  });
+
+  it('écarte un sous-projet importé par un fichier du dépôt', () => {
+    const root = makeRoot(VENDOR);
+    const sources = makeProject({ 'src/app.ts': "import './vendor/index.js';\n", 'src/vendor/index.ts': '' });
+    expect(vendoredSubprojects(root, subprojectDirs(root, files), sources)).toEqual([]);
+  });
+
+  it('écarte un sous-projet importé par le nom de paquet qu’il déclare', () => {
+    const root = makeRoot(VENDOR);
+    const sources = makeProject({ 'src/app.ts': "import 'scraper/lib';\n", 'src/vendor/index.ts': '' });
+    expect(vendoredSubprojects(root, subprojectDirs(root, files), sources)).toEqual([]);
+  });
+
+  it('ne compte pas un import venu de l’intérieur du sous-projet', () => {
+    const root = makeRoot({ ...VENDOR, 'src/vendor/util.ts': '' });
+    const sources = makeProject({
+      'src/app.ts': '',
+      'src/vendor/index.ts': "import './util.js';\n",
+      'src/vendor/util.ts': '',
+    });
+    expect(vendoredSubprojects(root, subprojectDirs(root, [...files, 'src/vendor/util.ts']), sources))
+      .toEqual(['src/vendor']);
+  });
+
+  it('respecte un espace de travail déclaré, package.json comme pnpm', () => {
+    const sources = makeProject({ 'src/app.ts': '', 'src/vendor/index.ts': '' });
+    const npm = makeRoot({ ...VENDOR, 'package.json': JSON.stringify({ name: 'root', workspaces: ['src/*'] }) });
+    expect(vendoredSubprojects(npm, subprojectDirs(npm, files), sources)).toEqual([]);
+    const pnpm = makeRoot({ ...VENDOR, 'pnpm-workspace.yaml': 'packages:\n  - \'src/vendor\'\n' });
+    expect(vendoredSubprojects(pnpm, subprojectDirs(pnpm, files), sources)).toEqual([]);
+  });
+
+  it('ignore un package.json marqueur de format, qui n’est pas un sous-projet', () => {
+    const root = makeRoot({
+      'package.json': JSON.stringify({ name: 'root', dependencies: {} }),
+      'src/esm/package.json': JSON.stringify({ type: 'module' }),
+      'src/esm/worker.ts': '',
+      'src/app.ts': '',
+    });
+    const sources = makeProject({ 'src/app.ts': '', 'src/esm/worker.ts': '' });
+    expect(vendoredSubprojects(root, subprojectDirs(root, ['src/app.ts', 'src/esm/worker.ts']), sources))
+      .toEqual([]);
+  });
+});
+
+describe('pnpmWorkspaceGlobs', () => {
+  it('lit la forme bloc, en ignorant commentaires et lignes vides', () => {
+    const raw = 'packages:\n  # les apps\n  - \'apps/*\'\n  - packages/**\n\nonlyBuiltDependencies:\n  - esbuild\n';
+    expect(pnpmWorkspaceGlobs(raw)).toEqual(['apps/*', 'packages/**']);
+  });
+
+  it('lit la forme en ligne et rend une liste vide sans champ packages', () => {
+    expect(pnpmWorkspaceGlobs('packages: ["apps/*", \'libs/*\']')).toEqual(['apps/*', 'libs/*']);
+    expect(pnpmWorkspaceGlobs('onlyBuiltDependencies:\n  - esbuild\n')).toEqual([]);
   });
 });

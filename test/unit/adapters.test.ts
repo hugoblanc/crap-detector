@@ -400,6 +400,20 @@ describe('mapJscpdReport', () => {
     expect(mapping.cloneLines.get('src/a.ts')?.has(50)).toBe(false);
   });
 
+  it('ancre sur le fichier mesuré un clone copié dans un sous-projet vendorisé', () => {
+    const vendorScope = { root: '/repo', files: ['src/a.ts', 'vendor/copy.ts', 'vendor/twin.ts'], vendored: ['vendor'] };
+    const mapping = mapJscpdReport({
+      duplicates: [
+        { lines: 9, firstFile: { name: '/repo/vendor/copy.ts', start: 1, end: 9 }, secondFile: { name: '/repo/src/a.ts', start: 20, end: 28 } },
+        { lines: 6, firstFile: { name: '/repo/vendor/copy.ts', start: 30, end: 35 }, secondFile: { name: '/repo/vendor/twin.ts', start: 1, end: 6 } },
+      ],
+    }, 5, vendorScope);
+    expect(mapping.findings.map((finding) => finding.file)).toEqual(['src/a.ts']);
+    expect(mapping.findings[0]?.message).toContain('vendor/copy.ts');
+    // Les lignes clonées restent comptées des deux côtés : le filtre SLOC écarte ensuite le vendorisé.
+    expect([...mapping.cloneLines.keys()].sort()).toEqual(['src/a.ts', 'vendor/copy.ts', 'vendor/twin.ts']);
+  });
+
   it('ignore un doublon dont un côté est incomplet', () => {
     const partial = { duplicates: [{ lines: 5, firstFile: { name: '/repo/src/a.ts', start: 1 } }] };
     expect(mapJscpdReport(partial, 5, scope).clones).toEqual([]);

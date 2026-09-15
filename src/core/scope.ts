@@ -23,6 +23,11 @@ export interface BaselineScope {
   /** Règles optionnelles activées, triées ; absent des baselines antérieures, qui les comptaient toutes. */
   rules: string[];
   /**
+   * Sous-projets vendorisés écartés du périmètre : package.json propre, aucun importeur, pas un
+   * espace de travail déclaré. Absent des baselines antérieures, qui les mesuraient.
+   */
+  vendored?: string[];
+  /**
    * false : knip jugé non fiable, son code mort n'est pas compté. Absent quand knip n'a pas tourné,
    * et des baselines antérieures, qui comptaient tout ce qu'il signalait.
    */
@@ -33,11 +38,22 @@ export interface ReportScope extends BaselineScope {
   gitignoreUnavailableReason?: string;
   /** Sous-dossiers qui ont leur propre package.json ; informatif, jamais écrit dans la baseline. */
   subprojects: string[];
+  /** Toujours renseigné sur un rapport, même vide : un scan sait toujours ce qu'il a écarté. */
+  vendored: string[];
 }
 
 export function baselineScope(scope: ReportScope): BaselineScope {
-  const { include, exclude, gitignore, toolsScoped, importRules, rules, knipTrusted } = scope;
-  return { include: [...include], exclude: [...exclude], gitignore, toolsScoped, importRules, rules: [...rules], knipTrusted };
+  const { include, exclude, gitignore, toolsScoped, importRules, rules, vendored, knipTrusted } = scope;
+  return {
+    include: [...include],
+    exclude: [...exclude],
+    gitignore,
+    toolsScoped,
+    importRules,
+    rules: [...rules],
+    vendored: [...vendored],
+    knipTrusted,
+  };
 }
 
 function sameList(a: string[], b: string[]): boolean {
@@ -75,7 +91,20 @@ export function scopeIncompatibility(
       + 'refaire la baseline';
   }
   return gitignoreIncompatibility(scope, current) ?? rulesIncompatibility(scope, current)
-    ?? knipIncompatibility(baseline, current, unusedFiles);
+    ?? vendoredIncompatibility(scope, current) ?? knipIncompatibility(baseline, current, unusedFiles);
+}
+
+/**
+ * Un sous-projet devenu vendorisé sort du périmètre : toute sa dette passerait pour corrigée.
+ * Dans l'autre sens, un import ajouté le fait rentrer et toute sa dette passerait pour nouvelle.
+ * Une baseline antérieure n'avait pas ce champ et mesurait tout : elle ne se compare qu'à un
+ * scan qui n'écarte rien.
+ */
+function vendoredIncompatibility(scope: BaselineScope, current: ReportScope): string | undefined {
+  if (sameList(scope.vendored ?? [], current.vendored)) return undefined;
+  const listed = (dirs: string[]): string => (dirs.length === 0 ? 'aucun' : dirs.join(', '));
+  return `sous-projets vendorisés écartés du périmètre modifiés (${listed(scope.vendored ?? [])} → `
+    + `${listed(current.vendored)}) : refaire la baseline`;
 }
 
 /**

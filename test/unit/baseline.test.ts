@@ -54,6 +54,7 @@ interface ReportOptions {
   thresholdOverride?: Partial<ReturnType<typeof defaultThresholds>>;
   include?: string[];
   gitignore?: boolean;
+  vendored?: string[];
 }
 
 /** ScanReport minimal : seuls les champs que la baseline lit sont remplis. */
@@ -76,6 +77,7 @@ function report(options: ReportOptions = {}): ScanReport {
       importRules: 3,
       rules: [],
       subprojects: [],
+      vendored: options.vendored ?? [],
     },
     metrics: { ...envelope, filesScanned: 3, summary: {} as never, files: [], findings: [] },
     slop: { ...envelope, summary: {} as never, findings: [] },
@@ -249,6 +251,25 @@ describe('incompatibilityReason', () => {
     const { include, exclude, gitignore, toolsScoped, importRules } = baseline.scope;
     const legacy = { ...baseline, scope: { include, exclude, gitignore, toolsScoped, importRules } } as unknown as Baseline;
     expect(incompatibilityReason(legacy, report({ withKnip: true }))).toMatch(/avant la sélection des règles/);
+  });
+
+  it('refuse une baseline dont les sous-projets vendorisés ne sont plus les mêmes', () => {
+    expect(incompatibilityReason(baseline, report({ withKnip: true, vendored: ['src/lawscrapper'] })))
+      .toMatch(/vendorisés écartés du périmètre modifiés \(aucun → src\/lawscrapper\)/);
+    const withVendored = makeBaseline(report({ withKnip: true, vendored: ['src/lawscrapper'] }));
+    expect(incompatibilityReason(withVendored, report({ withKnip: true })))
+      .toMatch(/\(src\/lawscrapper → aucun\)/);
+  });
+
+  it('accepte sans ce champ une baseline antérieure face à un scan qui n’écarte rien', () => {
+    const { include, exclude, gitignore, toolsScoped, importRules, rules } = baseline.scope;
+    const legacy = {
+      ...baseline,
+      scope: { include, exclude, gitignore, toolsScoped, importRules, rules },
+    } as unknown as Baseline;
+    expect(incompatibilityReason(legacy, report({ withKnip: true }))).toBeUndefined();
+    expect(incompatibilityReason(legacy, report({ withKnip: true, vendored: ['src/lawscrapper'] })))
+      .toMatch(/vendorisés/);
   });
 
   it('refuse une baseline écrite avec les règles d’imports antérieures, même sans outils', () => {

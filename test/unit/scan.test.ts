@@ -9,7 +9,12 @@ import { resolveConfig } from '../../src/core/config.js';
 import { makeFinding } from '../../src/core/findings.js';
 import { subprojectDirs } from '../../src/imports/manifest.js';
 import { scanFast, scanFile } from '../../src/scan/fast.js';
-import { assertRatiosInRange, scanFull, withoutNativeDuplicates } from '../../src/scan/full.js';
+import {
+  assertRatiosInRange,
+  scanFull,
+  withoutDeadFileMetrics,
+  withoutNativeDuplicates,
+} from '../../src/scan/full.js';
 
 const created: string[] = [];
 const config = resolveConfig({});
@@ -310,15 +315,48 @@ describe('scanFull', () => {
   it('signale les sous-dossiers qui ont leur propre package.json', async () => {
     const root = makeRoot({
       ...PROJECT,
+      'package.json': JSON.stringify({ name: 'fixture', workspaces: ['dashboard'], dependencies: {} }),
       'dashboard/package.json': JSON.stringify({ dependencies: { chart: '1.0.0' } }),
       'dashboard/node_modules/chart/package.json': '{}',
       'dashboard/src/view.ts': "import { draw } from 'chart';\nexport const view = draw;\n",
     });
     const report = await scanFull(root, config, { skipChurn: true, skipExternalTools: true });
     expect(report.scope.subprojects).toEqual(['dashboard']);
+    expect(report.scope.vendored).toEqual([]);
     expect(report.findings.filter((finding) => finding.rule.endsWith('-dependency'))).toEqual([]);
     expect(renderSummary(report).join('\n'))
       .toContain('sous-projets dashboard ont leur propre package.json : scanner chacun avec --root');
+  });
+
+  it('écarte du périmètre un sous-projet que personne n’importe', async () => {
+    const root = makeRoot({
+      ...PROJECT,
+      'src/vendor/package.json': JSON.stringify({ name: 'scraper', dependencies: { axios: '1.0.0' } }),
+      'src/vendor/scrape.ts': 'export function scrape(value: any): any { return value; }\n',
+    });
+    const report = await scanFull(root, config, { skipChurn: true, skipExternalTools: true });
+    expect(report.scope.vendored).toEqual(['src/vendor']);
+    expect(report.filesScanned).toBe(2);
+    expect(report.findings.some((finding) => finding.file.startsWith('src/vendor/'))).toBe(false);
+    expect(report.aggregates['typesafety.escapes.count']).toBe(1);
+    expect(renderSummary(report).join('\n')).toContain('sous-projets src/vendor écartés du périmètre');
+  });
+
+  it('mesure un sous-projet dès qu’un fichier du dépôt l’importe', async () => {
+    const root = makeRoot({
+      ...PROJECT,
+      'src/entry.ts': [
+        "import { helper } from './helper.js';",
+        "import { scrape } from './vendor/scrape.js';",
+        'export const run = (): number => helper(scrape(1));',
+      ].join('\n'),
+      'src/vendor/package.json': JSON.stringify({ name: 'scraper', dependencies: { axios: '1.0.0' } }),
+      'src/vendor/scrape.ts': 'export function scrape(value: any): any { return value; }\n',
+    });
+    const report = await scanFull(root, config, { skipChurn: true, skipExternalTools: true });
+    expect(report.scope.subprojects).toEqual(['src/vendor']);
+    expect(report.scope.vendored).toEqual([]);
+    expect(report.filesScanned).toBe(3);
   });
 
   it('garde la verbosité sous 1 quand les clones couvrent des lignes blanches', async () => {
@@ -434,6 +472,37 @@ describe('withoutNativeDuplicates', () => {
     };
     const kept = withoutNativeDuplicates(root, ['app/a.ts', 'loose/b.ts'], deadCode).findings;
     expect(kept.map((finding) => finding.file)).toEqual(['app/package.json', 'loose/b.ts']);
+  });
+});
+
+describe('withoutDeadFileMetrics', () => {
+  const dead = [makeFinding({ tool: 'knip', rule: 'unused-file', file: 'src/dead.ts', message: 'jamais importé' })];
+  const on = (tool: 'metrics' | 'imports' | 'jscpd', rule: string, file: string) =>
+    makeFinding({ tool, rule, file, symbol: 'f', message: 'peu importe' });
+
+  it('écarte les métriques et le slop d’un fichier que knip signale mort', () => {
+    const kept = withoutDeadFileMetrics([
+      on('metrics', 'cognitive-complexity', 'src/dead.ts'),
+      on('metrics', 'type-escape-any', 'src/dead.ts'),
+      on('metrics', 'cognitive-complexity', 'src/live.ts'),
+      ...dead,
+    ], dead);
+    expect(kept.map((finding) => `${finding.tool}|${finding.rule}|${finding.file}`))
+      .toEqual(['metrics|cognitive-complexity|src/live.ts', 'knip|unused-file|src/dead.ts']);
+  });
+
+  it('garde le paquet non déclaré et le clone, qui demandent un autre correctif', () => {
+    const kept = withoutDeadFileMetrics([
+      on('imports', 'unlisted-dependency', 'src/dead.ts'),
+      on('jscpd', 'duplicate-block', 'src/dead.ts'),
+      ...dead,
+    ], dead);
+    expect(kept).toHaveLength(3);
+  });
+
+  it('ne touche à rien sans fichier mort signalé', () => {
+    const findings = [on('metrics', 'file-length', 'src/live.ts')];
+    expect(withoutDeadFileMetrics(findings, [])).toEqual(findings);
   });
 });
 

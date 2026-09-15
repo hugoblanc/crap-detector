@@ -29,13 +29,22 @@ import { analyzeImports, dependencyContext, dependencyFinding } from '../imports
 import { analyzeGraph } from '../imports/graph.js';
 import type { ImportGraph } from '../imports/extract.js';
 import { fileImports } from '../imports/extract.js';
+import { subprojectDirs } from '../imports/manifest.js';
+import { vendoredSubprojects, withoutVendored } from '../imports/vendored.js';
 import { analyzeSlop, slopFindings } from '../slop/analyze.js';
 import { slopHits } from '../slop/rules.js';
 import type { SlopHit } from '../slop/rules.js';
 
 export interface FastScan {
+  /** Fichiers mesurés : le périmètre, moins les sous-projets vendorisés. */
   files: string[];
   sourceFiles: Map<string, SourceFile>;
+  /** Sous-dossiers qui portent leur propre package.json de projet, vendorisés compris. */
+  subprojects: string[];
+  /** Sous-projets écartés du périmètre : package.json propre, aucun importeur, pas un espace de travail. */
+  vendored: string[];
+  /** Fichiers de ces sous-projets, hors mesure mais transmis à jscpd pour garder les clones du code vivant. */
+  vendoredFiles: string[];
   metrics: MetricsReport;
   slop: SlopReport;
   /** Occurrences brutes, réutilisées par le scan complet pour y ajouter les clones. */
@@ -58,9 +67,27 @@ export function loadSourceFiles(rootPath: string, files: string[]): Map<string, 
   return sources;
 }
 
+/** Ce que le scan mesure, une fois les sous-projets vendorisés retirés des fichiers collectés. */
+type MeasuredScope = Pick<FastScan, 'files' | 'sourceFiles' | 'subprojects' | 'vendored' | 'vendoredFiles'>;
+
+function measuredScope(rootPath: string, collected: string[], loaded: Map<string, SourceFile>): MeasuredScope {
+  const subprojects = subprojectDirs(rootPath, collected);
+  const vendored = vendoredSubprojects(rootPath, subprojects, loaded);
+  const files = withoutVendored(collected, vendored);
+  const kept = new Set(files);
+  return {
+    files,
+    sourceFiles: vendored.length === 0 ? loaded : new Map([...loaded].filter(([file]) => kept.has(file))),
+    subprojects,
+    vendored,
+    vendoredFiles: collected.filter((file) => !kept.has(file)),
+  };
+}
+
 export function scanFast(rootPath: string, config: ResolvedConfig, ignored?: IgnoredPaths): FastScan {
-  const files = collectFiles(rootPath, config.scope, ignored);
-  const sourceFiles = loadSourceFiles(rootPath, files);
+  const collected = collectFiles(rootPath, config.scope, ignored);
+  const scope = measuredScope(rootPath, collected, loadSourceFiles(rootPath, collected));
+  const { files, sourceFiles } = scope;
 
   const fileMetrics: FileMetrics[] = [];
   for (const [relative, sourceFile] of sourceFiles) {
@@ -98,8 +125,7 @@ export function scanFast(rootPath: string, config: ResolvedConfig, ignored?: Ign
   ].sort(compareFindings);
 
   return {
-    files,
-    sourceFiles,
+    ...scope,
     metrics,
     slop,
     slopHits: slopAnalysis.hits,
