@@ -89,8 +89,24 @@ function typesEntry(dir: string, parsed: Record<string, unknown>): string | unde
   return candidates.map((candidate) => join(dir, candidate)).find((path) => path.endsWith('.d.ts') && existsSync(path));
 }
 
-const DECLARE_MODULE = /declare\s+module\s+['"]([^'"]+)['"]/g;
+/**
+ * Motifs qui ne prouvent rien. `declare module '*'` couvre n'importe quel specifier :
+ * un seul paquet installé qui le publie, fût-ce une dépendance transitive que
+ * l'utilisateur n'a pas choisie, éteindrait la seule règle critique du produit pour
+ * tout le manifeste. Un motif doit porter un préfixe ou un suffixe qui le restreint.
+ */
+function isRestrictive(pattern: string): boolean {
+  const star = pattern.indexOf('*');
+  if (star === -1) return pattern !== '';
+  return pattern.slice(0, star) !== '' || pattern.slice(star + 1) !== '';
+}
 
+/**
+ * Lu sur l'AST, pas sur le texte : `declare module '*'` écrit dans un exemple de JSDoc
+ * n'est pas une déclaration, et une expression régulière sur le source ne fait pas la
+ * différence. Le fichier n'est analysé que s'il contient les deux mots-clés, sans quoi
+ * la centaine de fichiers de déclarations d'un dépôt réel serait parsée pour rien.
+ */
 function declaredModulesIn(path: string): string[] {
   let content: string;
   try {
@@ -98,7 +114,15 @@ function declaredModulesIn(path: string): string[] {
   } catch {
     return [];
   }
-  return [...content.matchAll(DECLARE_MODULE)].map((match) => match[1] ?? '');
+  if (!content.includes('declare') || !content.includes('module')) return [];
+  const source = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  const names: string[] = [];
+  for (const statement of source.statements) {
+    if (ts.isModuleDeclaration(statement) && ts.isStringLiteral(statement.name)) {
+      names.push(statement.name.text);
+    }
+  }
+  return names;
 }
 
 /**
@@ -125,7 +149,7 @@ export function ambientModulePatterns(rootPath: string, manifest: Manifest): str
     }
     if (!isPlainObject(parsed)) continue;
     const entry = typesEntry(dir, parsed);
-    if (entry !== undefined) patterns.push(...declaredModulesIn(entry));
+    if (entry !== undefined) patterns.push(...declaredModulesIn(entry).filter(isRestrictive));
     const dependencies = parsed['dependencies'];
     if (isPlainObject(dependencies)) queue.push(...Object.keys(dependencies));
   }

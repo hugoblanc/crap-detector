@@ -391,6 +391,44 @@ describe('ambientModulePatterns', () => {
   it('rend une liste vide quand rien n’est installé', () => {
     expect(ambientModulePatterns(makeRoot({ 'package.json': '{}' }), base)).toEqual([]);
   });
+
+  it('ignore un `declare module` écrit dans un commentaire', () => {
+    const root = makeRoot({
+      'node_modules/racine/package.json': '{"name":"racine","types":"index.d.ts"}',
+      'node_modules/racine/index.d.ts': [
+        '/**',
+        ' * Exemple d\'utilisation :',
+        ' * declare module \'*\';',
+        ' */',
+        'declare module \'@vrai/Alias\' {}',
+      ].join('\n'),
+    });
+    expect(ambientModulePatterns(root, base)).toEqual(['@vrai/Alias']);
+  });
+
+  it('écarte un motif qui couvrirait n’importe quel specifier', () => {
+    const root = makeRoot({
+      'node_modules/racine/package.json': '{"name":"racine","types":"index.d.ts"}',
+      'node_modules/racine/index.d.ts': "declare module '*';\ndeclare module '*.svg';\ndeclare module '@theme/*';\n",
+    });
+    expect(ambientModulePatterns(root, base)).toEqual(['*.svg', '@theme/*']);
+  });
+
+  it('garde la règle critique vivante malgré un `declare module *` publié par une dépendance', () => {
+    const root = makeRoot({
+      'package.json': '{"dependencies":{"racine":"1.0.0"}}',
+      'node_modules/racine/package.json': '{"name":"racine","types":"index.d.ts"}',
+      'node_modules/racine/index.d.ts': "declare module '*';\n",
+      'src/a.ts': '',
+    });
+    const governing = { ...base, dependencies: new Set(['racine']) };
+    const findings = importFindings(
+      { rootPath: root, manifestFor: () => governing, isRuntimeImport: () => true, resolvesSpecifier: specifierResolver(root) },
+      new Map([['src/a.ts', [{ specifier: 'paquet-invente', specifierKind: 'bare' as const, kind: 'import' as const, line: 1 }]]]),
+    );
+    expect(findings.map((finding) => [finding.rule, finding.symbol]))
+      .toEqual([['unknown-dependency', 'paquet-invente']]);
+  });
 });
 
 describe('importFindings', () => {
