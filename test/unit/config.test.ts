@@ -90,7 +90,7 @@ describe('règles optionnelles et seuils de signalement', () => {
     expect(resolved.rules['redundant-else']).toBe(true);
     expect(resolved.rules['passthrough-wrapper']).toBe(false);
     expect(resolved.reportThresholds).toMatchObject({ maxLinesPerFunction: 80, maxFileLines: 600 });
-    expect(resolved.thresholds.maxLinesPerFunction).toBe(50);
+    expect(resolved.thresholds.maxLinesPerFunction).toBe(55);
   });
 
   it('refuse une règle inconnue, une valeur non booléenne ou un seuil de signalement inconnu', () => {
@@ -113,7 +113,7 @@ describe('resolveConfig', () => {
     const resolved = resolveConfig({});
     expect(resolved.thresholds).toMatchObject({
       cyclomaticComplexity: 10,
-      cognitiveComplexity: 15,
+      cognitiveComplexity: 17,
       erosionFraction: 0.35,
     });
     expect(resolved.scope.include).toContain('**/*.ts');
@@ -125,7 +125,7 @@ describe('resolveConfig', () => {
       scope: { include: ['src/**/*.ts'] },
     });
     expect(resolved.thresholds.cyclomaticComplexity).toBe(12);
-    expect(resolved.thresholds.cognitiveComplexity).toBe(15);
+    expect(resolved.thresholds.cognitiveComplexity).toBe(17);
     expect(resolved.scope.include).toEqual(['src/**/*.ts']);
     // L'exclusion par défaut est conservée si le projet ne la redéfinit pas.
     expect(resolved.scope.exclude.length).toBeGreaterThan(0);

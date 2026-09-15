@@ -81,6 +81,9 @@ C'est la contrainte qui structure tout le code.
 **Complexité par fonction.** Cyclomatique (McCabe) et cognitive (spec Sonar v1.7,
 implémentée d'après le white paper et testée sur ses exemples publiés), longueur,
 paramètres, profondeur d'imbrication, callbacks imbriqués.
+La cyclomatique ne compte un `&&`, un `||` ou un `??` que s'il pilote le flux — condition
+de `if`, de boucle, de ternaire, ou expression prise comme instruction. `a ?? défaut` et
+`x || 0` produisent une valeur, pas une branche à suivre.
 
 **Érosion** (SlopCodeBench). Part de la masse de complexité concentrée dans les fonctions
 au-delà du seuil cyclomatique, avec `mass(f) = CC(f) × √SLOC(f)`.
@@ -91,7 +94,9 @@ Repères : 0,15 humain, 0,33 agentique. Elle augmente sur 89,8 % des trajectoire
 agentiques, contre 80 % pour l'érosion : c'est le signal le plus fréquent des deux.
 
 **Signatures d'AI slop.** `catch` vide ou qui ne fait que logger (error-masking, +47 %
-chez GitClear).
+chez GitClear), quand le `try` attend une opération asynchrone : c'est là qu'un échec
+réseau ou base disparaît sans trace. Un repli synchrone — `JSON.parse`, écriture
+`localStorage`, sélecteur invalide — n'est pas signalé, il est presque toujours voulu.
 `else` redondant, variable assignée puis retournée, ternaire booléen et wrapper qui transmet ses paramètres à l'identique sont désactivés par défaut, voir [Règles par défaut](#règles-par-défaut).
 
 **Échappements de typage.** `any` explicite, `as unknown as`, `@ts-ignore`, `@ts-nocheck`.
@@ -211,10 +216,10 @@ Le seuil de signalement, dans `reportThresholds`, décide de ce que `scan`, `exp
 
 | Règle | Clé | Cliquet | Signalement |
 | --- | --- | --- | --- |
-| `function-length` | `maxLinesPerFunction` | 50 | 100 |
-| `file-length` | `maxFileLines` | 300 | 600 |
+| `function-length` | `maxLinesPerFunction` | 55 | 100 |
+| `file-length` | `maxFileLines` | 330 | 600 |
 | `cyclomatic-complexity` | `cyclomaticComplexity` | 10 | 25 |
-| `cognitive-complexity` | `cognitiveComplexity` | 15 | 30 |
+| `cognitive-complexity` | `cognitiveComplexity` | 17 | 30 |
 | `nesting-depth` | `maxDepth` | 3 | 5 |
 | `too-many-params` | `maxParams` | 4 | 6 |
 
@@ -224,6 +229,11 @@ Le hook `file` ne sort en code 2 que pour un finding affiché : une fonction de 
 `check` affiche toujours les findings derrière une régression, masqués ou non, puisque ce sont eux qui font échouer le gate.
 Changer un seuil de signalement ne rend pas la baseline incomparable : ce qui est compté ne change pas.
 Sur les dépôts mesurés, la valeur médiane des alertes utiles était proche du double de celle des alertes exactes mais inutiles, d'où ces défauts.
+
+Les seuils du cliquet des échelles fines portent une marge de 10 % sur la valeur canonique : 55 pour 50 lignes, 330 pour 300, 17 pour 15.
+Une alerte à un cran du seuil canonique — 302 lignes, 51 lignes, complexité cognitive 16 — n'a jamais été jugée utile à corriger sur les cinq dépôts mesurés, la plus petite valeur utile étant au moins 40 % au-dessus.
+Sur les échelles courtes, profondeur d'imbrication et nombre de paramètres, la marge tombe sous l'unité et le seuil ne bouge pas : là, le premier cran au-dessus du seuil portait bien des alertes utiles.
+La complexité cyclomatique reste à son cutoff canonique de 10 : ce sont les opérateurs de valeur par défaut qui gonflaient le bas de sa distribution, et ils ne sont plus comptés.
 
 ## Le cliquet
 
@@ -278,9 +288,9 @@ Cinq règles la gardent honnête :
 {
   "thresholds": {
     "cyclomaticComplexity": 10,
-    "cognitiveComplexity": 15,
-    "maxLinesPerFunction": 50,
-    "maxFileLines": 300,
+    "cognitiveComplexity": 17,
+    "maxLinesPerFunction": 55,
+    "maxFileLines": 330,
     "maxDepth": 3,
     "maxParams": 4,
     "maxNestedCallbacks": 3,

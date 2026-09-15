@@ -14,7 +14,7 @@
  * une règle bruyante tue la confiance dans tout l'outil en une semaine.
  */
 import { Node, SyntaxKind } from 'ts-morph';
-import type { IfStatement, Node as TsNode, SourceFile } from 'ts-morph';
+import type { CatchClause, IfStatement, Node as TsNode, SourceFile } from 'ts-morph';
 import type { OptionalRule, RuleSwitches } from '../core/config.js';
 import type { Severity } from '../core/types.js';
 import { isFunctionLike } from '../metrics/cognitive.js';
@@ -89,17 +89,53 @@ function isConsoleCall(statement: TsNode): boolean {
     && callee.getExpression().getText() === 'console';
 }
 
+/**
+ * Le try attend-il une opération asynchrone ?
+ *
+ * Mesuré sur cinq dépôts (docs/PRECISION-2026-09.md), le fait qu'un bloc catch soit vide
+ * ne dit rien du risque : écriture `localStorage` en navigation privée, `JSON.parse` d'une
+ * trame tierce, sélecteur CSS invalide, tout cela est avalé exprès et sans conséquence.
+ * Les seules alertes jugées utiles portaient sur un échec d'appel réseau ou d'écriture en
+ * base perdu en silence. L'attente d'une promesse est la marque observable de ce
+ * franchissement de frontière — un commentaire de justification, lui, ne discrimine rien :
+ * les trois alertes utiles en portaient un.
+ *
+ * Une fonction imbriquée dans le try est ignorée : son rejet ne remonte pas à ce catch.
+ */
+function awaitsWork(clause: CatchClause): boolean {
+  const tryStatement = clause.getParent();
+  if (!Node.isTryStatement(tryStatement)) return false;
+  let found = false;
+  const visit = (node: TsNode): void => {
+    if (found || isFunctionLike(node)) return;
+    if (Node.isAwaitExpression(node)) {
+      found = true;
+      return;
+    }
+    if (Node.isForOfStatement(node) && node.getAwaitKeyword() !== undefined) {
+      found = true;
+      return;
+    }
+    node.forEachChild(visit);
+  };
+  visit(tryStatement.getTryBlock());
+  return found;
+}
+
 /** Un catch vide ou qui se contente de logger masque l'erreur au lieu de la traiter. */
 function catchRules(sourceFile: SourceFile, file: string, hits: SlopHit[]): void {
   for (const clause of sourceFile.getDescendantsOfKind(SyntaxKind.CatchClause)) {
+    if (!awaitsWork(clause)) continue;
     const statements = clause.getBlock().getStatements();
     if (statements.length === 0) {
-      hits.push(hit(file, clause, 'empty-catch', 'major', 'catch vide : l\'erreur est avalée'));
+      hits.push(
+        hit(file, clause, 'empty-catch', 'major', 'catch vide : l\'échec d\'une opération asynchrone disparaît sans trace'),
+      );
       continue;
     }
     if (statements.every(isConsoleCall)) {
       hits.push(
-        hit(file, clause, 'console-only-catch', 'major', 'catch qui ne fait que logger'),
+        hit(file, clause, 'console-only-catch', 'major', 'catch qui ne fait que logger : l\'échec d\'une opération asynchrone ne va nulle part'),
       );
     }
   }

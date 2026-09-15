@@ -6,12 +6,26 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+/**
+ * Seuils du cliquet. Ceux des échelles fines portent une marge de 10 % sur la valeur
+ * canonique : mesurée sur cinq dépôts, une alerte à un cran du seuil canonique (302 lignes
+ * pour 300, 51 pour 50, 16 pour 15) n'a jamais été jugée utile à corriger, la plus petite
+ * valeur utile étant au moins 40 % au-dessus (docs/PRECISION-2026-09.md). Sur les échelles
+ * courtes — profondeur, paramètres — la marge tombe sous l'unité et le seuil ne bouge pas :
+ * là, le premier cran au-dessus du seuil portait bien des alertes utiles.
+ */
 export interface Thresholds {
-  /** McCabe. Défaut ESLint 20, cutoff historique 10. */
+  /**
+   * McCabe, cutoff historique 10, sans marge : les valeurs frôlant le seuil étaient
+   * gonflées par les opérateurs de valeur par défaut, que le calcul ne compte plus
+   * (metrics/cyclomatic.ts). Les majorer une seconde fois coûterait des alertes utiles.
+   */
   cyclomaticComplexity: number;
-  /** Sonar. Défaut eslint-plugin-sonarjs 15. */
+  /** Sonar. Défaut eslint-plugin-sonarjs 15, +10 %. */
   cognitiveComplexity: number;
+  /** Canonique 50, +10 %. */
   maxLinesPerFunction: number;
+  /** Canonique 300, +10 %. */
   maxFileLines: number;
   maxDepth: number;
   maxParams: number;
@@ -111,9 +125,9 @@ export interface ScopeConfig {
 
 const DEFAULT_THRESHOLDS: Thresholds = {
   cyclomaticComplexity: 10,
-  cognitiveComplexity: 15,
-  maxLinesPerFunction: 50,
-  maxFileLines: 300,
+  cognitiveComplexity: 17,
+  maxLinesPerFunction: 55,
+  maxFileLines: 330,
   maxDepth: 3,
   maxParams: 4,
   maxNestedCallbacks: 3,

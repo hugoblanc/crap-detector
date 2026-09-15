@@ -27,32 +27,63 @@ function rulesOf(code: string): string[] {
 }
 
 describe('catch masquant l’erreur', () => {
-  it('signale un catch vide', () => {
+  it('signale un catch vide sur une opération attendue', () => {
     const code = [
-      'declare function work(): void;',
-      'export function run(): void {',
-      '  try { work(); } catch (error) {}',
+      'declare function work(): Promise<void>;',
+      'export async function run(): Promise<void> {',
+      '  try { await work(); } catch (error) {}',
       '}',
     ].join('\n');
     expect(rulesOf(code)).toEqual(['empty-catch']);
   });
 
-  it('signale un catch qui ne fait que logger', () => {
+  it('signale un catch qui ne fait que logger une opération attendue', () => {
     const code = [
-      'declare function work(): void;',
-      'export function run(): void {',
-      '  try { work(); } catch (error) { console.error(error); console.log("bis"); }',
+      'declare function work(): Promise<void>;',
+      'export async function run(): Promise<void> {',
+      '  try { await work(); } catch (error) { console.error(error); console.log("bis"); }',
       '}',
     ].join('\n');
     expect(rulesOf(code)).toEqual(['console-only-catch']);
   });
 
+  it('signale un catch vide sur une boucle for await', () => {
+    const code = [
+      'declare const flux: AsyncIterable<string>;',
+      'export async function run(): Promise<void> {',
+      '  try { for await (const ligne of flux) { console.log(ligne); } } catch {}',
+      '}',
+    ].join('\n');
+    expect(rulesOf(code)).toEqual(['empty-catch']);
+  });
+
   it('laisse passer un catch qui relance ou traite', () => {
     const code = [
-      'declare function work(): void;',
+      'declare function work(): Promise<void>;',
       'declare function report(error: unknown): void;',
+      'export async function run(): Promise<void> {',
+      '  try { await work(); } catch (error) { report(error); throw error; }',
+      '}',
+    ].join('\n');
+    expect(rulesOf(code)).toEqual([]);
+  });
+
+  it('se tait sur un repli synchrone : rien ne franchit de frontière', () => {
+    const code = [
+      'export function lire(brut: string): unknown {',
+      '  try { return JSON.parse(brut); } catch {}',
+      '  return null;',
+      '}',
+    ].join('\n');
+    expect(rulesOf(code)).toEqual([]);
+  });
+
+  it('se tait quand l’attente est dans une fonction imbriquée : son rejet n’arrive pas ici', () => {
+    const code = [
+      'declare function work(): Promise<void>;',
+      'declare function planifier(cb: () => Promise<void>): void;',
       'export function run(): void {',
-      '  try { work(); } catch (error) { report(error); throw error; }',
+      '  try { planifier(async () => { await work(); }); } catch {}',
       '}',
     ].join('\n');
     expect(rulesOf(code)).toEqual([]);
@@ -279,11 +310,12 @@ describe('échappements de typage', () => {
 describe('enclosingSymbol', () => {
   it('rend la fonction englobante, ou #module au niveau du fichier', () => {
     const code = [
-      'declare function work(): void;',
-      'export function outer(): void {',
-      '  try { work(); } catch (error) {}',
+      'declare function work(): Promise<void>;',
+      'export async function outer(): Promise<void> {',
+      '  try { await work(); } catch (error) {}',
       '}',
-      'try { work(); } catch (error) {}',
+      'await work().catch(() => {});',
+      'try { await work(); } catch (error) {}',
     ].join('\n');
     const hits = slopHits(parse(code), 'src/sample.ts', ALL_RULES);
     expect(hits.map((entry) => entry.symbol)).toEqual(['outer', '#module']);
@@ -291,10 +323,10 @@ describe('enclosingSymbol', () => {
 
   it('rend la lambda la plus proche, pas la fonction racine', () => {
     const code = [
-      'declare function each(cb: () => void): void;',
+      'declare function each(cb: () => void): Promise<void>;',
       'export function outer(): void {',
-      '  const inner = () => { try { each(inner); } catch (error) {} };',
-      '  inner();',
+      '  const inner = async () => { try { await each(inner); } catch (error) {} };',
+      '  void inner();',
       '}',
     ].join('\n');
     expect(slopHits(parse(code), 'src/sample.ts', ALL_RULES)[0]?.symbol).toBe('inner');

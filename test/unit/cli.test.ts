@@ -157,8 +157,8 @@ describe('main', () => {
       'package.json': JSON.stringify({ name: 'fixture', dependencies: {} }),
       'src/clean.ts': 'export const add = (a: number, b: number): number => a + b;\n',
       'src/dirty.ts': [
-        'export function dirty(value: any): number {',
-        '  try { return value; } catch (error) {}',
+        'export async function dirty(value: any): Promise<number> {',
+        '  try { return await value; } catch (error) {}',
         '  return 0;',
         '}',
       ].join('\n'),
@@ -186,7 +186,7 @@ describe('main', () => {
     expect(out.join('')).toContain('1 finding(s) sous le seuil de signalement, comptés par le cliquet : --all');
     out = [];
     await main(['scan', ...options, '--all']);
-    expect(out.join('')).toContain('[function-length] long : lignes 60 > 50');
+    expect(out.join('')).toContain('[function-length] long : lignes 60 > 55');
     out = [];
     await main(['scan', ...options, '--json']);
     const report = JSON.parse(out.join('')) as { findings: Array<{ rule: string }> };
@@ -209,7 +209,7 @@ describe('main', () => {
     expect(await main(['file', join(root, 'src/long.ts'), '--root', root])).toBe(0);
     expect(err.join('')).toBe('');
     expect(await main(['file', join(root, 'src/huge.ts'), '--root', root])).toBe(2);
-    expect(err.join('')).toContain('[function-length] huge : lignes 120 > 50');
+    expect(err.join('')).toContain('[function-length] huge : lignes 120 > 55');
   });
 
   it('affiche l’aide et sort en erreur d’usage sans commande', async () => {

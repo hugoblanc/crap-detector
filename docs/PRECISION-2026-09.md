@@ -119,5 +119,70 @@ Le hook `file` ne signale que ce qui dépasse le seuil de signalement, pour ne p
 
 ### Pas traité dans cette itération
 
-Les règles de catch, d'échappement de typage et de duplication restent actives et affichées telles quelles, avec 18 % à 52 % d'alertes utiles.
+Les règles d'échappement de typage et de duplication restent actives et affichées telles quelles, avec 33 % à 52 % d'alertes utiles.
 Les huit règles du second tableau suivent le traitement qui y est indiqué.
+
+## Itération 3 : les règles exactes et sans intérêt
+
+Une seconde passe de vérification à la main, 497 alertes sur les mêmes cinq dépôts, donne 95 % d'exactitude pour 35 % d'utilité.
+Près de 300 alertes sur 497 sont donc exactes et sans intérêt.
+Trois causes en portent l'essentiel, traitées ici (issues #16 et #17).
+
+### Les deux règles de catch jugeaient le bloc, pas ce qu'il avale
+
+`empty-catch` était utile à 11 % et `console-only-catch` à 18 %, pour 100 % d'exactitude.
+Le bloc était bien vide, mais l'échec avalé ne coûtait rien : écriture `localStorage` en navigation privée, `JSON.parse` d'une trame tierce, sélecteur CSS invalide, appel d'analytique non bloquant.
+Les seules alertes jugées utiles portaient sur un appel réseau ou une écriture en base dont l'échec disparaissait en silence.
+
+Le critère retenu est donc l'attente d'une opération asynchrone dans le `try` : c'est la marque observable d'un franchissement de frontière, et rien d'autre dans le code ne le dit.
+Une fonction imbriquée dans le `try` ne compte pas, son rejet n'arrive pas à ce `catch`.
+
+La piste « se taire quand un commentaire justifie le repli », proposée dans l'issue #16, est écartée par la mesure : les trois alertes utiles de `empty-catch` portaient toutes un commentaire de justification.
+Un commentaire dit qu'une décision a été prise, pas qu'elle est bonne.
+
+### La complexité cyclomatique comptait les valeurs par défaut
+
+Chaque `??` et chaque `||` valait un point, alors qu'une valeur par défaut n'est pas une branche que le lecteur doit suivre.
+Un opérateur logique n'est désormais compté que s'il pilote le flux : condition de `if`, de boucle, de ternaire, ou expression prise comme instruction (`prêt && envoyer()`).
+Sur les cinq dépôts, 42 % des alertes de la règle tenaient à des opérateurs de valeur.
+
+### Les seuils frôlés
+
+Sur les alertes classées inutiles, une part notable est à un cran du seuil : 302 lignes contre 300, 51 contre 50, complexité cognitive 16 contre 15.
+Les seuils du cliquet des échelles fines portent donc une marge de 10 % : 55 lignes par fonction, 330 lignes par fichier, complexité cognitive 17.
+Sur les échelles courtes — profondeur d'imbrication, nombre de paramètres — la marge tombe sous l'unité et le seuil ne bouge pas, et c'est ce que dit la mesure : 3 des 8 alertes utiles de `nesting-depth` et 2 des 8 de `too-many-params` sont exactement au premier cran.
+La complexité cyclomatique garde son cutoff de 10 : le bas de sa distribution était gonflé par les opérateurs de valeur, que le calcul ne compte plus, et la majorer en plus coûtait une alerte utile de l'échantillon pour quatre inutiles.
+
+Une marge n'est pas un troisième niveau de seuil : elle est intégrée aux défauts de `thresholds`, qui restent réglables par projet.
+
+### Ce que ça donne
+
+Rescan des cinq dépôts, alertes des huit règles concernées, et verdicts humains des alertes échantillonnées :
+
+| Règle | Alertes avant | Après | Échantillon : utiles perdues | inutiles retirées |
+| --- | --- | --- | --- | --- |
+| cyclomatic-complexity | 965 | 556 | 2 | 14 |
+| cognitive-complexity | 744 | 612 | 0 | 7 |
+| function-length | 1734 | 1511 | 0 | 9 |
+| file-length | 330 | 285 | 0 | 8 |
+| nesting-depth | 350 | 350 | 0 | 0 |
+| too-many-params | 114 | 114 | 0 | 0 |
+| empty-catch | 80 | 36 | 0 | 16 |
+| console-only-catch | 11 | 9 | 1 | 1 |
+| **total** | **4328** | **3473** | **3** | **55** |
+
+Sur l'échantillon vérifié à la main de ces huit règles, l'utilité passe de 28 % (76 utiles sur 268) à 35 % (73 sur 210).
+
+Les trois alertes utiles perdues :
+
+- une fonction de page dont la cyclomatique tenait aux valeurs par défaut du rendu ; `function-length` la signale toujours, à 276 lignes, et au-dessus du seuil de signalement ;
+- un comparateur de tri dont la cyclomatique tombe de 16 à 8 une fois les `|| 0` retirés ; `cognitive-complexity` signale toujours la méthode qui le contient, à 23 ;
+- un `catch` de constructeur qui logue une chaîne d'accès de propriétés en échec, sans opération asynchrone : le défaut réel, un objet à moitié construit rendu sans erreur, n'est pas ce que la règle mesure, et rien ne le signale plus.
+
+`console-only-catch` reste active malgré ses 11 % d'utilité après restriction : ses 9 alertes restantes sur cinq dépôts ne pèsent rien, et la désactiver par défaut coûtait deux alertes utiles pour neuf inutiles.
+
+### Ce qui reste ouvert
+
+- Le cas « l'échec est déjà traité après le `try` » n'est pas détecté : deux alertes de `console-only-catch` portent sur un envoi d'e-mail dont l'échec est marqué en base juste après le bloc.
+- Les `catch` de scripts ponctuels et d'évaluations comptent comme ceux du code de production : quatre alertes restantes en viennent.
+- Les seuils de `nesting-depth` et `too-many-params` restent les plus bruyants des règles de taille, à 21 % et 24 % d'utilité, sans correctif dans cette itération.

@@ -57,15 +57,43 @@ describe('cyclomaticComplexity', () => {
     expect(complexityOf(code, 'guarded')).toBe(3);
   });
 
-  it('compte chaque opérateur &&, || et ?? individuellement', () => {
+  it('compte chaque opérateur logique d’une condition, individuellement', () => {
     const code = [
-      'function logic(a: boolean, b: boolean, c: boolean, d: number | undefined): unknown {',
-      '  if (a && b && c) { return d ?? 0; }',
-      '  return a || b;',
+      'declare function work(): void;',
+      'function logic(a: boolean, b: boolean, c: boolean): void {',
+      '  if (a && b && c) { work(); }',
+      '  while (a || b) { work(); }',
+      '  if (!(a || b) && c) { work(); }',
       '}',
     ].join('\n');
-    // 1 + if + deux && + ?? + || = 6
-    expect(complexityOf(code, 'logic')).toBe(6);
+    // 1 + if + deux && + while + || + if + || + && = 9
+    expect(complexityOf(code, 'logic')).toBe(9);
+  });
+
+  it('ne compte pas les opérateurs qui ne font que produire une valeur', () => {
+    const code = [
+      'declare function work(x: unknown): void;',
+      'function defaults(a: number | undefined, b: string | null, c: boolean): void {',
+      '  const n = a ?? 0;',
+      '  const s = b || "vide";',
+      '  work(n || s);',
+      '  const flag = c && n > 0;',
+      '  work(flag);',
+      '}',
+    ].join('\n');
+    // 1 + le > du ET, qui n’est pas un opérateur logique = 1
+    expect(complexityOf(code, 'defaults')).toBe(1);
+  });
+
+  it('compte un opérateur logique pris comme instruction : il décide de l’appel', () => {
+    const code = [
+      'declare function work(): void;',
+      'function shortCircuit(a: boolean, b: boolean): void {',
+      '  a && work();',
+      '  b || work();',
+      '}',
+    ].join('\n');
+    expect(complexityOf(code, 'shortCircuit')).toBe(3);
   });
 
   it('mesure les fonctions imbriquées séparément, pas dans leur parent', () => {

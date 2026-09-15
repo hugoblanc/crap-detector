@@ -47,8 +47,8 @@ const PROJECT = {
     'export const run = (): number => helper(1);',
   ].join('\n'),
   'src/helper.ts': [
-    'export function helper(value: any): number {',
-    '  try { return value + 1; } catch (error) {}',
+    'export async function helper(value: any): Promise<number> {',
+    '  try { return (await value) + 1; } catch (error) {}',
     '  return 0;',
     '}',
   ].join('\n'),
@@ -347,15 +347,15 @@ describe('scanFull', () => {
 
   it('garde la verbosité sous 1 sans jscpd quand un catch vide couvre des lignes blanches', async () => {
     const swallowed = Array.from({ length: 10 }, (_, i) => [
-      `export function attempt${String(i)}(): void {`,
-      '  try { risky(); } catch {',
+      `export async function attempt${String(i)}(): Promise<void> {`,
+      '  try { await risky(); } catch {',
       ...Array.from({ length: 9 }, () => ''),
       '  }',
       '}',
     ].join('\n')).join('\n');
     const root = makeRoot({
       'package.json': PROJECT['package.json'],
-      'src/risky.ts': `declare function risky(): void;\n${swallowed}\n`,
+      'src/risky.ts': `declare function risky(): Promise<void>;\n${swallowed}\n`,
     });
     const report = await scanFull(root, config, { skipChurn: true, skipExternalTools: true });
     expect(report.aggregates['verbosity.fraction']).toBeGreaterThan(0);
