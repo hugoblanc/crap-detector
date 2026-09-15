@@ -68,6 +68,10 @@ C'est la contrainte qui structure tout le code.
   où seul un paquet non déclaré est cherché par son chemin.
   Environ 200 ms de bout en bout, dont l'essentiel est le démarrage de Node.
   C'est ce qui le rend utilisable depuis un hook déclenché à chaque édition.
+  Une exception, assumée : un specifier ni déclaré ni résolu déclenche le balayage des
+  déclarations ambiantes des paquets installés, de 46 à 271 ms selon la taille du dépôt,
+  payé une fois par manifeste. C'est le cas nominal juste après qu'un agent a inventé un
+  paquet, et c'est le prix à payer pour ne pas crier au loup.
 - **`scan`, `check`, `baseline`** ajoutent git, `knip` et `jscpd`, chargés par
   `import()` dynamique. Un import statique tirerait `knip` — plusieurs mégaoctets — dans
   chaque invocation, y compris celle du chemin rapide.
@@ -106,6 +110,7 @@ Sous 50 commits dans la fenêtre, le couplage n'est pas mesuré : les fichiers c
 **Supply chain.** Chaque import de paquet est jugé contre le `package.json` le plus proche du fichier, pas seulement celui de la racine.
 Un paquet non déclaré et introuvable dans tous les `node_modules` en remontant depuis le fichier sort en `unknown-dependency`, critique : c'est la signature du slopsquatting, quand un agent invente une dépendance plausible.
 Avant de l'affirmer, le specifier est réellement résolu : résolution de modules TypeScript sous les options effectives du tsconfig le plus proche, `paths` et champ `exports` compris, puis recherche d'un `declare module '…'` dans les déclarations des paquets installés, dépendances transitives suivies.
+Ces déclarations sont lues sur l'AST, pas sur le texte, et un motif qui couvrirait n'importe quel specifier, `declare module '*'`, est écarté : sans quoi un seul paquet transitif suffirait à éteindre la règle.
 Un alias de framework comme `@theme/Layout` ou un sous-module déclaré en ambiant comme `@docusaurus/Link` ne sort donc plus : sur une règle critique, un faux positif coûte plus cher que le signal.
 Un paquet non déclaré mais installé, arrivé par une dépendance transitive comme `express` via `@nestjs/platform-express`, sort en `unlisted-dependency`, majeur.
 Un import utilisé seulement comme type ne sort pas si son `@types/` est déclaré : TypeScript l'efface, rien n'est chargé à l'exécution.
@@ -143,7 +148,7 @@ C'est la première cause de faux positifs mesurée sur cinq dépôts réels : 19
 
 - les fichiers source nommés par un script du `package.json`, par exemple la cible d'un `dev` ou d'un `tsx scripts/…` ;
 - la commande d'un `nodemon.json` ou d'un `nodemonConfig`, quand un script lance `nodemon` ;
-- les dossiers `scripts/` et `bin/` de la racine, lintés et formatés comme le reste du dépôt et pourtant jamais importés ;
+- les dossiers `scripts/` et `bin/`, à la racine comme sous n'importe quel dossier du périmètre, lintés et formatés comme le reste du dépôt et pourtant jamais importés ;
 - les tests d'une seconde configuration jest citée par un script, comme `jest --config test/jest-e2e.json`, dont knip ne lit que la première : ses `testMatch`, ses `testRegex` et ses fichiers de setup deviennent des entrées.
 
 Le résumé de `scan` dit combien de points d'entrée ont été déclarés.
@@ -191,7 +196,8 @@ Six règles exactes mais presque jamais utiles sont donc désactivées par défa
 `superfluous-export` est la part de `unused-export` qui ne demande que de retirer un mot-clé : le symbole n'a pas d'importeur, mais il sert dans son propre fichier.
 knip range les deux sous le même verdict ; l'usage local se lit sur l'AST du fichier.
 Sur les 32 alertes `unused-export` vérifiées à la main, 19 sortent ainsi de la règle, aucune n'ayant été jugée utile à corriger, et les 13 qui restent en comptent 5 : l'utilité passe de 16 % à 38 %.
-Ce qui reste sous `unused-export` est du code mort supprimable, en majeur ; l'export superflu sort en mineur, règle activable par `"rules": { "superfluous-export": true }`.
+Ce qui reste sous `unused-export` est majeur, avec deux messages : « ré-export jamais importé, la ligne peut être retirée » quand le symbole vient d'un `export … from '…'`, où il vit toujours dans son module d'origine, et « symbole mort, supprimable » sinon.
+L'export superflu sort en mineur, règle activable par `"rules": { "superfluous-export": true }`.
 
 Désactivée, une règle n'est pas mesurée : ni finding, ni dette dans la baseline, ni lignes comptées dans la verbosité.
 Chacune se réactive par sa clé dans la section `rules` de `crap-detector.json`, par exemple `"rules": { "redundant-else": true }`.

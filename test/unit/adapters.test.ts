@@ -7,6 +7,7 @@ import { analyzeDeadCode, mapKnipReport } from '../../src/adapters/knip.js';
 import { analyzeDuplication, mapJscpdReport } from '../../src/adapters/jscpd.js';
 import { judgeKnipReport } from '../../src/adapters/knip-reliability.js';
 import { declaredEntries, isBinaryOnlyPackage } from '../../src/adapters/knip-entries.js';
+import type { ExportOrigin } from '../../src/imports/local-usage.js';
 import { resolveConfig } from '../../src/core/config.js';
 import { makeFinding } from '../../src/core/findings.js';
 
@@ -179,22 +180,39 @@ describe('mapKnipReport', () => {
     expect(moved?.id).toBe(before?.id);
   });
 
-  it('sépare le symbole mort de l’export superflu, et ne rend le second que si la règle est active', () => {
-    const exported = { issues: [{ file: 'src/a.ts', exports: [{ name: 'TABLE', line: 3 }, { name: 'mort', line: 9 }] }] };
-    const usedInOwnFile = (_file: string, symbol: string): boolean => symbol === 'TABLE';
-    const parDéfaut = mapKnipReport(exported, ['src/a.ts'], withTypes, { usedInOwnFile });
+  it('sépare le symbole mort, le ré-export et l’export superflu, et ne rend le dernier que si la règle est active', () => {
+    const exported = {
+      issues: [{
+        file: 'src/a.ts',
+        exports: [{ name: 'TABLE', line: 3 }, { name: 'mort', line: 9 }, { name: 'relayé', line: 1 }],
+      }],
+    };
+    const origins: Record<string, ExportOrigin> = { TABLE: 'local-usage', relayé: 'reexport', mort: 'dead' };
+    const exportOrigin = (_file: string, symbol: string): ExportOrigin => origins[symbol] ?? 'dead';
+    const parDéfaut = mapKnipReport(exported, ['src/a.ts'], withTypes, { exportOrigin });
     expect(parDéfaut.findings.map((finding) => [finding.rule, finding.symbol, finding.severity]))
-      .toEqual([['unused-export', 'mort', 'major']]);
-    expect(parDéfaut.summary.unusedExports).toBe(1);
+      .toEqual([['unused-export', 'mort', 'major'], ['unused-export', 'relayé', 'major']]);
     expect(parDéfaut.findings[0]?.message).toContain('symbole mort, supprimable');
+    // Un ré-export vit dans son module d'origine : seule sa ligne est retirable.
+    expect(parDéfaut.findings[1]?.message).toContain('ré-export jamais importé, la ligne peut être retirée');
+    expect(parDéfaut.summary.unusedExports).toBe(2);
 
     const activée = resolveConfig({ rules: { 'superfluous-export': true } }).rules;
-    const complet = mapKnipReport(exported, ['src/a.ts'], activée, { usedInOwnFile });
+    const complet = mapKnipReport(exported, ['src/a.ts'], activée, { exportOrigin });
     expect(complet.findings.map((finding) => [finding.rule, finding.symbol, finding.severity]))
-      .toEqual([['unused-export', 'mort', 'major'], ['superfluous-export', 'TABLE', 'minor']]);
-    expect(complet.findings[1]?.message).toContain('l\'export peut être retiré');
-    // Le compteur du cliquet ne suit que le vrai code mort.
-    expect(complet.summary.unusedExports).toBe(1);
+      .toEqual([
+        ['unused-export', 'mort', 'major'],
+        ['unused-export', 'relayé', 'major'],
+        ['superfluous-export', 'TABLE', 'minor'],
+      ]);
+    expect(complet.findings[2]?.message).toContain('l\'export peut être retiré');
+    // Le compteur du cliquet ne suit pas l'export superflu.
+    expect(complet.summary.unusedExports).toBe(2);
+  });
+
+  it('traite un export sans importeur comme du code mort quand l’AST n’a pas été lu', () => {
+    const mapping = mapKnipReport({ issues: [{ file: 'src/a.ts', exports: [{ name: 'x', line: 1 }] }] }, ['src/a.ts'], withTypes);
+    expect(mapping.findings[0]?.message).toContain('symbole mort, supprimable');
   });
 
   it('tolère une sortie vide ou malformée', () => {
@@ -228,6 +246,23 @@ describe('déclaration des points d’entrée', () => {
     expect(entries.patterns).not.toContain('dist/main.js');
     expect(entries.patterns).not.toContain('src/a.ts');
     expect(entries.added).toBe(3);
+  });
+
+  it('déclare aussi les dossiers de scripts imbriqués, une seule fois par racine', () => {
+    const root = makeRoot({ 'package.json': '{}', 'scripts/racine.ts': '' });
+    const entries = declaredEntries(root, [
+      'scripts/racine.ts',
+      'scripts/lot/imbriqué.ts',
+      'server/scripts/audit.ts',
+      'evals/scripts/run.ts',
+      'src/app.ts',
+    ]);
+    const sources = '{js,mjs,cjs,jsx,ts,tsx,mts,cts}';
+    expect(entries.patterns.slice(2)).toEqual([
+      `evals/scripts/**/*.${sources}`,
+      `scripts/**/*.${sources}`,
+      `server/scripts/**/*.${sources}`,
+    ]);
   });
 
   it('suit la cible lancée par nodemon, seulement si un script npm lance nodemon', () => {

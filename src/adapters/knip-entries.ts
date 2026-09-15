@@ -124,11 +124,20 @@ function indirectCommands(rootPath: string, scripts: string[]): string[] {
   return commands;
 }
 
-/** Dossiers de scripts présents à la racine, en motifs de fichiers source. */
-function scriptDirPatterns(rootPath: string): string[] {
-  return SCRIPT_DIRS
-    .filter((dir) => existsSync(join(rootPath, dir)))
-    .map((dir) => `${dir}/**/*.${EXTENSIONS_GLOB}`);
+/**
+ * Dossiers de scripts, à la racine et sous n'importe quel dossier du périmètre : un dépôt
+ * qui range ses scripts de maintenance dans `server/scripts/` ou `evals/scripts/` a la même
+ * convention et le même problème. Le premier segment `scripts` ou `bin` d'un chemin suffit,
+ * ce qui replie du même coup les sous-dossiers d'un dossier déjà retenu.
+ */
+function scriptDirPatterns(rootPath: string, files: readonly string[]): string[] {
+  const dirs = new Set(SCRIPT_DIRS.filter((dir) => existsSync(join(rootPath, dir))));
+  for (const file of files) {
+    const segments = file.split('/').slice(0, -1);
+    const depth = segments.findIndex((segment) => SCRIPT_DIRS.includes(segment));
+    if (depth !== -1) dirs.add(segments.slice(0, depth + 1).join('/'));
+  }
+  return [...dirs].map((dir) => `${dir}/**/*.${EXTENSIONS_GLOB}`);
 }
 
 /** Chemin de config cité par un script, relatif à la racine, qui existe et se lit en JSON. */
@@ -228,7 +237,7 @@ export function declaredEntries(rootPath: string, files: readonly string[]): Dec
   const commands = [...scripts, ...indirectCommands(rootPath, scripts)];
   const added = [
     ...scriptTargets(rootPath, commands),
-    ...scriptDirPatterns(rootPath),
+    ...scriptDirPatterns(rootPath, files),
     ...testConfigEntries(rootPath, scripts, files),
   ];
   const unique = [...new Set(added)].sort();
