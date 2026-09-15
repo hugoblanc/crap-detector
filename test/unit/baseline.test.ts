@@ -261,6 +261,23 @@ describe('incompatibilityReason', () => {
       .toMatch(/\(src\/lawscrapper → aucun\)/);
   });
 
+  /**
+   * Version du générateur et périmètre vendorisé sont deux causes distinctes, chacune avec son
+   * message : la première ne doit pas rendre la seconde muette, sinon un sous-projet entré ou
+   * sorti du périmètre passerait inaperçu à chaque version identique.
+   */
+  it('distingue le changement de version du générateur du changement de périmètre vendorisé', () => {
+    const vendored = ['src/lawscrapper'];
+    // Même version, périmètre différent : c'est le périmètre qui parle.
+    expect(incompatibilityReason(baseline, report({ withKnip: true, vendored })))
+      .toMatch(/vendorisés/);
+    // Version différente, périmètre identique : c'est la version qui parle.
+    const older = { ...baseline, generator: { ...baseline.generator, version: '0.1.0' } };
+    const versionReason = incompatibilityReason(older, report({ withKnip: true }));
+    expect(versionReason).toMatch(/0\.1\.0/);
+    expect(versionReason).not.toMatch(/vendorisés/);
+  });
+
   it('accepte sans ce champ une baseline antérieure face à un scan qui n’écarte rien', () => {
     const { include, exclude, gitignore, toolsScoped, importRules, rules } = baseline.scope;
     const legacy = {
