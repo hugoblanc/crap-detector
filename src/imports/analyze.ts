@@ -70,7 +70,7 @@ export function dependencyContext(rootPath: string, sourceFiles: Map<string, Sou
     isRuntimeImport: (file, specifier) => {
       const source = sourceFiles.get(file);
       if (source === undefined) return true;
-      const kept = runtime.get(file) ?? runtimeImports(source, manifestFor(file).verbatimModuleSyntax);
+      const kept = runtime.get(file) ?? runtimeImports(source, manifestFor(file));
       runtime.set(file, kept);
       return kept.has(specifier);
     },
@@ -167,7 +167,7 @@ function emittedStatically(
     if (ref.kind === 'dynamic') return false;
     const source = sourceFiles.get(file);
     if (ref.kind === 'require' || source === undefined) return true;
-    const emitted = kept.get(file) ?? staticRuntimeImports(source, manifestFor(file).verbatimModuleSyntax);
+    const emitted = kept.get(file) ?? staticRuntimeImports(source, manifestFor(file));
     kept.set(file, emitted);
     return emitted.has(ref.specifier);
   };

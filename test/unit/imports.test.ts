@@ -21,7 +21,6 @@ import {
   isDeclared,
   matchesAliasPattern,
   readManifest,
-  stripJsonComments,
 } from '../../src/imports/manifest.js';
 import type { Manifest } from '../../src/imports/manifest.js';
 import { analyzeImports, importFindings } from '../../src/imports/analyze.js';
@@ -176,19 +175,24 @@ describe('buildImportGraph', () => {
 });
 
 describe('isTypesModule', () => {
-  it('retient un fichier de types et de constantes, pas un fichier qui contient une fonction', () => {
+  it('retient un fichier de types seuls, écarte toute valeur exportée à l’exécution', () => {
     const sources = makeProject({
-      'src/types.ts': 'export interface A { run(): void }\nexport type B = A[];\nexport const KEYS = [\'a\'] as const;\n',
+      'src/types.ts': 'export interface A { run(): void }\nexport type B = A[];\n',
+      'src/ambient.d.ts': 'export interface A { value: number }\nexport const KEY: string;\n',
+      'src/constants.ts': 'export type Key = string;\nexport const KEYS = [\'a\'] as const;\n',
+      'src/schema.ts': "import { z } from 'zod';\nexport type User = { id: string };\nexport const userSchema = z.object({ id: z.string() });\n",
       'src/logic.ts': 'export interface A { value: number }\nexport const make = (): A => ({ value: 1 });\n',
-      'src/barrel.ts': "export * from './types.js';\n",
+      'src/enum.ts': 'export type Key = string;\nexport enum Color { Red }\n',
+      'src/barrel.ts': "export * from './types.js';\nexport type Alias = number;\n",
     });
-    expect([...sources].filter(([, source]) => isTypesModule(source)).map(([file]) => file)).toEqual(['src/types.ts']);
+    expect([...sources].filter(([, source]) => isTypesModule(source)).map(([file]) => file))
+      .toEqual(['src/types.ts', 'src/ambient.d.ts']);
   });
 });
 
 describe('cycles à l’exécution', () => {
-  function cyclesOf(files: Record<string, string>, tsconfig: object = {}): string[][] {
-    const root = makeRoot({ 'package.json': '{}', 'tsconfig.json': JSON.stringify(tsconfig) });
+  function cyclesOf(files: Record<string, string>, tsconfig: object = {}, extra: Record<string, string> = {}): string[][] {
+    const root = makeRoot({ 'package.json': '{}', 'tsconfig.json': JSON.stringify(tsconfig), ...extra });
     return findCycles(analyzeImports(root, makeProject(files)).cycleGraph).map((cycle) => cycle.files);
   }
 
@@ -217,21 +221,35 @@ describe('cycles à l’exécution', () => {
     expect(cyclesOf(files)).toEqual([]);
     expect(cyclesOf(files, { compilerOptions: { verbatimModuleSyntax: true } })).toEqual([['src/a.ts', 'src/b.ts']]);
   });
-});
 
-describe('stripJsonComments', () => {
-  it('retire les commentaires de ligne et de bloc', () => {
-    const raw = '{\n  // ligne\n  "a": 1, /* bloc */\n  "b": 2\n}';
-    expect(JSON.parse(stripJsonComments(raw))).toEqual({ a: 1, b: 2 });
+  it('avec emitDecoratorMetadata, compte l’injection croisée de deux services', () => {
+    const files = {
+      'src/a.service.ts': [
+        "import { BService } from './b.service.js';",
+        'declare const Injectable: () => ClassDecorator;',
+        '@Injectable()',
+        'export class AService { constructor(private readonly b: BService) {} }',
+      ].join('\n'),
+      'src/b.service.ts': [
+        "import { AService } from './a.service.js';",
+        'declare const Injectable: () => ClassDecorator;',
+        '@Injectable()',
+        'export class BService { constructor(private readonly a: AService) {} }',
+      ].join('\n'),
+    };
+    const options = { experimentalDecorators: true, emitDecoratorMetadata: true };
+    expect(cyclesOf(files)).toEqual([]);
+    expect(cyclesOf(files, { compilerOptions: options })).toEqual([['src/a.service.ts', 'src/b.service.ts']]);
   });
 
-  it('préserve une séquence // à l’intérieur d’une chaîne', () => {
-    const raw = '{ "url": "https://example.com", "b": 2 }';
-    expect(JSON.parse(stripJsonComments(raw))).toEqual({ url: 'https://example.com', b: 2 });
-  });
-
-  it('retire les virgules traînantes', () => {
-    expect(JSON.parse(stripJsonComments('{ "a": [1, 2,], }'))).toEqual({ a: [1, 2] });
+  it('lit les options d’émission héritées par extends', () => {
+    const files = {
+      'src/a.ts': "import { B } from './b.js';\nexport class A { b?: B }\n",
+      'src/b.ts': "import { A } from './a.js';\nexport class B { a?: A }\n",
+    };
+    const base = { 'tsconfig.base.json': JSON.stringify({ compilerOptions: { verbatimModuleSyntax: true } }) };
+    expect(cyclesOf(files)).toEqual([]);
+    expect(cyclesOf(files, { extends: './tsconfig.base.json' }, base)).toEqual([['src/a.ts', 'src/b.ts']]);
   });
 });
 
@@ -263,6 +281,41 @@ describe('readManifest', () => {
       .toEqual(['fsevents', 'ts-morph', 'typescript', 'vitest']);
     expect(manifest.subpathImports).toEqual(['#core/*']);
     expect(manifest.pathAliases).toEqual(['@app/*']);
+  });
+
+  it('suit la chaîne extends pour les options d’émission et les alias', () => {
+    const root = makeRoot({
+      'package.json': JSON.stringify({ dependencies: {} }),
+      'tsconfig.base.json': JSON.stringify({
+        compilerOptions: {
+          verbatimModuleSyntax: true,
+          emitDecoratorMetadata: true,
+          baseUrl: '.',
+          paths: { '@app/*': ['./src/*'] },
+        },
+      }),
+      'tsconfig.json': JSON.stringify({ extends: './tsconfig.base.json' }),
+    });
+    const manifest = readManifest(root);
+    expect(manifest.trustworthy).toBe(true);
+    expect(manifest.verbatimModuleSyntax).toBe(true);
+    expect(manifest.emitDecoratorMetadata).toBe(true);
+    expect(manifest.pathAliases).toEqual(['@app/*']);
+    expect(manifest.baseUrl).toBe('');
+  });
+
+  it('reste fiable sur un tsconfig bancal : extends introuvable, cible d’alias mal formée', () => {
+    const root = makeRoot({
+      'package.json': JSON.stringify({ dependencies: {} }),
+      'tsconfig.json': JSON.stringify({
+        extends: './nulle-part.json',
+        compilerOptions: { paths: { '@bad/*': 'pas-un-tableau', '@app/*': ['./src/*'] } },
+      }),
+    });
+    const manifest = readManifest(root);
+    expect(manifest.trustworthy).toBe(true);
+    expect(manifest.pathAliases).toEqual(['@bad/*', '@app/*']);
+    expect(manifest.pathMappings).toEqual([{ pattern: '@app/*', targets: ['./src/*'] }]);
   });
 
   it('se déclare non fiable sans package.json', () => {
@@ -297,6 +350,7 @@ describe('isDeclared', () => {
     pathMappings: [{ pattern: '@app/*', targets: ['./src/*'] }],
     baseUrl: '',
     verbatimModuleSyntax: false,
+    emitDecoratorMetadata: false,
     trustworthy: true,
   };
 
@@ -320,6 +374,7 @@ describe('importFindings', () => {
     pathMappings: [],
     baseUrl: '',
     verbatimModuleSyntax: false,
+    emitDecoratorMetadata: false,
     trustworthy: true,
   };
 
@@ -459,7 +514,23 @@ describe('runtimeImports', () => {
         'export function f(a: A, b: B, c: C): void { void a; void b; void c; }',
       ].join('\n'),
     });
-    expect([...runtimeImports(sources.get('src/a.ts') as SourceFile, true)].sort()).toEqual(['inline', 'typed']);
+    const emit = { verbatimModuleSyntax: true, emitDecoratorMetadata: false };
+    expect([...runtimeImports(sources.get('src/a.ts') as SourceFile, emit)].sort()).toEqual(['inline', 'typed']);
+  });
+
+  it('avec emitDecoratorMetadata, garde le type d’un paramètre de constructeur décoré', () => {
+    const sources = makeProject({
+      'src/a.service.ts': [
+        "import { Injectable } from '@nestjs/common';",
+        "import { BService } from './b.service.js';",
+        '@Injectable()',
+        'export class AService { constructor(private readonly b: BService) {} }',
+      ].join('\n'),
+    });
+    const source = sources.get('src/a.service.ts') as SourceFile;
+    const emit = { verbatimModuleSyntax: false, emitDecoratorMetadata: true };
+    expect([...runtimeImports(source)].sort()).toEqual(['@nestjs/common']);
+    expect([...runtimeImports(source, emit)].sort()).toEqual(['./b.service.js', '@nestjs/common']);
   });
 });
 

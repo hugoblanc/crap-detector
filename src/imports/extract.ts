@@ -78,11 +78,22 @@ export function fileImports(sourceFile: SourceFile): ImportRef[] {
 }
 
 /**
- * Sortie JavaScript du fichier, types effacés : un import utilisé seulement en position de type
- * disparaît. Transpilation d'un fichier seul, sans métadonnées de décorateurs.
- * Avec `verbatimModuleSyntax` du projet, seul `import type` s'efface.
+ * Options du projet qui décident qu'un import survit à l'émission : `import { X }` non marqué
+ * `type` avec `verbatimModuleSyntax`, type d'un paramètre de constructeur décoré avec
+ * `emitDecoratorMetadata` (`design:paramtypes`, cas d'une injection NestJS).
  */
-function emitWithoutTypes(sourceFile: SourceFile, verbatimModuleSyntax: boolean): string {
+export interface EmitOptions {
+  verbatimModuleSyntax: boolean;
+  emitDecoratorMetadata: boolean;
+}
+
+const NO_EMIT_OPTIONS: EmitOptions = { verbatimModuleSyntax: false, emitDecoratorMetadata: false };
+
+/**
+ * Sortie JavaScript du fichier, types effacés : un import utilisé seulement en position de type
+ * disparaît. Transpilation d'un fichier seul, sous les options d'émission du projet.
+ */
+function emitWithoutTypes(sourceFile: SourceFile, emit: EmitOptions): string {
   return ts.transpileModule(sourceFile.getFullText(), {
     fileName: sourceFile.getBaseName(),
     compilerOptions: {
@@ -90,14 +101,15 @@ function emitWithoutTypes(sourceFile: SourceFile, verbatimModuleSyntax: boolean)
       target: ts.ScriptTarget.ESNext,
       jsx: ts.JsxEmit.Preserve,
       experimentalDecorators: true,
-      verbatimModuleSyntax,
+      verbatimModuleSyntax: emit.verbatimModuleSyntax,
+      emitDecoratorMetadata: emit.emitDecoratorMetadata,
     },
   }).outputText;
 }
 
 /** Modules encore importés une fois les types effacés : leur paquet est chargé à l'exécution. */
-export function runtimeImports(sourceFile: SourceFile, verbatimModuleSyntax = false): Set<string> {
-  const outputText = emitWithoutTypes(sourceFile, verbatimModuleSyntax);
+export function runtimeImports(sourceFile: SourceFile, emit: EmitOptions = NO_EMIT_OPTIONS): Set<string> {
+  const outputText = emitWithoutTypes(sourceFile, emit);
   return new Set(ts.preProcessFile(outputText, true, true).importedFiles.map((ref) => ref.fileName));
 }
 
@@ -105,10 +117,10 @@ export function runtimeImports(sourceFile: SourceFile, verbatimModuleSyntax = fa
  * Modules importés ou réexportés en tête de module une fois les types effacés. Un `import()`
  * dynamique n'y figure pas, même vers un module aussi importé pour ses types.
  */
-export function staticRuntimeImports(sourceFile: SourceFile, verbatimModuleSyntax = false): Set<string> {
+export function staticRuntimeImports(sourceFile: SourceFile, emit: EmitOptions = NO_EMIT_OPTIONS): Set<string> {
   const output = ts.createSourceFile(
     sourceFile.getBaseName(),
-    emitWithoutTypes(sourceFile, verbatimModuleSyntax),
+    emitWithoutTypes(sourceFile, emit),
     ts.ScriptTarget.ESNext,
     false,
     sourceFile.getExtension() === '.tsx' ? ts.ScriptKind.JSX : ts.ScriptKind.JS,
@@ -122,17 +134,44 @@ export function staticRuntimeImports(sourceFile: SourceFile, verbatimModuleSynta
   return kept;
 }
 
-/** true si le nœud contient une fonction dotée d'un corps : de la logique, pas seulement des types. */
-function containsLogic(node: ts.Node): boolean {
-  if (ts.isFunctionLike(node) && (node as ts.FunctionLikeDeclaration).body !== undefined) return true;
-  return ts.forEachChild(node, containsLogic) ?? false;
+function hasModifier(statement: ts.Statement, kind: ts.SyntaxKind): boolean {
+  return ts.canHaveModifiers(statement)
+    && (ts.getModifiers(statement)?.some((modifier) => modifier.kind === kind) ?? false);
 }
 
-/** Module de types : déclare au moins un type et aucune fonction. Ses importeurs partagent un contrat. */
+function declaresType(statement: ts.Statement): boolean {
+  return ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement);
+}
+
+/** true si le réexport laisse quelque chose à l'exécution : `export type` et `export { type X }` non. */
+function reexportsValue(statement: ts.ExportDeclaration): boolean {
+  if (statement.isTypeOnly) return false;
+  const clause = statement.exportClause;
+  if (clause === undefined || !ts.isNamedExports(clause)) return true;
+  return clause.elements.some((element) => !element.isTypeOnly);
+}
+
+/**
+ * true si le statement laisse une valeur à l'exécution : variable, classe, fonction, enum non
+ * `const`, namespace, réexport. Un `declare` ambiant ne produit rien.
+ */
+function emitsValue(statement: ts.Statement): boolean {
+  if (hasModifier(statement, ts.SyntaxKind.DeclareKeyword)) return false;
+  if (declaresType(statement) || ts.isImportDeclaration(statement) || ts.isEmptyStatement(statement)) return false;
+  if (ts.isExportDeclaration(statement)) return reexportsValue(statement);
+  if (ts.isEnumDeclaration(statement)) return !hasModifier(statement, ts.SyntaxKind.ConstKeyword);
+  return true;
+}
+
+/**
+ * Module de types : il déclare au moins un type et n'exporte aucune valeur à l'exécution.
+ * Ses importeurs partagent un contrat, pas du code, et changent ensemble pour cette raison.
+ * Un schéma zod ou une table de constantes exporte bien une valeur : c'est du couplage réel.
+ */
 export function isTypesModule(sourceFile: SourceFile): boolean {
   const root = sourceFile.compilerNode;
-  return root.statements.some((statement) => ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement))
-    && !containsLogic(root);
+  if (!root.statements.some(declaresType)) return false;
+  return root.isDeclarationFile || !root.statements.some(emitsValue);
 }
 
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.d.ts', '.js', '.jsx', '.mjs', '.cjs'];

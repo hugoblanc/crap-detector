@@ -8,7 +8,8 @@
  * la règle se désactive au lieu de deviner.
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { join, posix } from 'node:path';
+import { join, posix, relative } from 'node:path';
+import { ts } from 'ts-morph';
 
 export interface Manifest {
   /** Dossier du package.json, relatif à la racine ; '' pour la racine. */
@@ -25,6 +26,8 @@ export interface Manifest {
   baseUrl: string;
   /** compilerOptions.verbatimModuleSyntax : un import non marqué `type` survit à l'émission. */
   verbatimModuleSyntax: boolean;
+  /** compilerOptions.emitDecoratorMetadata : un type de paramètre décoré survit à l'émission. */
+  emitDecoratorMetadata: boolean;
   /**
    * false quand un fichier de config existe mais n'a pas pu être lu :
    * la détection de dépendances inconnues est alors désactivée.
@@ -49,50 +52,6 @@ const DEPENDENCY_SECTIONS = [
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
- * Retire commentaires et virgules traînantes d'un JSONC (format des tsconfig.json).
- * Les chaînes sont préservées : un `//` dans une valeur ne doit pas couper la ligne.
- */
-export function stripJsonComments(raw: string): string {
-  let output = '';
-  let index = 0;
-  let inString = false;
-  while (index < raw.length) {
-    const char = raw[index] ?? '';
-    const next = raw[index + 1] ?? '';
-    if (inString) {
-      output += char;
-      if (char === '\\') {
-        output += next;
-        index += 2;
-        continue;
-      }
-      if (char === '"') inString = false;
-      index += 1;
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      output += char;
-      index += 1;
-      continue;
-    }
-    if (char === '/' && next === '/') {
-      while (index < raw.length && raw[index] !== '\n') index += 1;
-      continue;
-    }
-    if (char === '/' && next === '*') {
-      index += 2;
-      while (index < raw.length && !(raw[index] === '*' && raw[index + 1] === '/')) index += 1;
-      index += 2;
-      continue;
-    }
-    output += char;
-    index += 1;
-  }
-  return output.replace(/,(\s*[}\]])/g, '$1');
 }
 
 /** Chemin d'un fichier de config tel qu'un message le cite : 'package.json' ou 'app/package.json'. */
@@ -122,31 +81,62 @@ function readPackage(rootPath: string, dir: string, manifest: Manifest): string 
   }
 }
 
-/** Remplit alias et baseUrl ; un tsconfig absent n'est pas une erreur. */
+/**
+ * Hôte de lecture des tsconfig. `readDirectory` rend une liste vide : seules les options
+ * comptent ici, pas les fichiers du projet, et les énumérer coûterait un parcours du dépôt.
+ */
+const PARSE_CONFIG_HOST: ts.ParseConfigHost = {
+  useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
+  readDirectory: () => [],
+  fileExists: ts.sys.fileExists,
+  readFile: ts.sys.readFile,
+};
+
+/**
+ * Options effectives du tsconfig, chaîne `extends` suivie : une option héritée d'un
+ * `tsconfig.base.json` gouverne l'émission autant que si elle était écrite en clair.
+ * Les diagnostics de contenu sont ignorés — un dépôt analysé n'est pas forcément sain,
+ * et une option inconnue ne doit pas faire taire la résolution des alias.
+ */
+function effectiveCompilerOptions(configPath: string, dir: string): ts.CompilerOptions {
+  const read = ts.readConfigFile(configPath, ts.sys.readFile);
+  if (read.error !== undefined) {
+    throw new Error(ts.flattenDiagnosticMessageText(read.error.messageText, ' '));
+  }
+  return ts.parseJsonConfigFileContent(read.config, PARSE_CONFIG_HOST, dir, undefined, configPath).options;
+}
+
+/**
+ * Dossier contre lequel les cibles de `paths` se résolvent, rendu relatif à la racine :
+ * `baseUrl` s'il est déclaré, sinon le dossier du tsconfig qui déclare `paths`.
+ */
+function pathsBase(rootPath: string, configDir: string, options: ts.CompilerOptions): string {
+  // pathsBasePath : dossier du tsconfig qui déclare `paths`, renseigné par TypeScript faute de baseUrl.
+  const declared = options.baseUrl ?? options.pathsBasePath;
+  const base = typeof declared === 'string' ? declared : configDir;
+  return relative(rootPath, base).split(/[\\/]/).join('/');
+}
+
+/** Remplit options d'émission, alias et baseUrl ; un tsconfig absent n'est pas une erreur. */
 function readTsconfig(rootPath: string, dir: string, manifest: Manifest): string | undefined {
   const label = inDir(dir, 'tsconfig.json');
-  let raw: string;
+  const configDir = join(rootPath, dir);
+  const configPath = join(configDir, 'tsconfig.json');
+  if (!existsSync(configPath)) return undefined;
   try {
-    raw = readFileSync(join(rootPath, dir, 'tsconfig.json'), 'utf8');
-  } catch {
-    return undefined;
-  }
-  try {
-    const parsed: unknown = JSON.parse(stripJsonComments(raw));
-    if (!isPlainObject(parsed)) throw new Error(`${label} ne contient pas un objet`);
-    const compilerOptions = parsed['compilerOptions'];
-    if (!isPlainObject(compilerOptions)) return undefined;
-    manifest.verbatimModuleSyntax = compilerOptions['verbatimModuleSyntax'] === true;
-    const baseUrl = compilerOptions['baseUrl'];
-    if (typeof baseUrl === 'string') manifest.baseUrl = baseUrl;
-    const paths = compilerOptions['paths'];
-    if (!isPlainObject(paths)) return undefined;
+    const options = effectiveCompilerOptions(configPath, configDir);
+    manifest.verbatimModuleSyntax = options.verbatimModuleSyntax === true;
+    manifest.emitDecoratorMetadata = options.emitDecoratorMetadata === true;
+    const paths = options.paths;
+    if (paths === undefined) return undefined;
+    manifest.baseUrl = pathsBase(rootPath, configDir, options);
     manifest.pathAliases = Object.keys(paths);
+    // TypeScript rend `paths` tel qu'écrit : une cible qui n'est pas un tableau de chaînes est ignorée.
     manifest.pathMappings = Object.entries(paths)
-      .filter((entry): entry is [string, unknown[]] => Array.isArray(entry[1]))
+      .filter(([, targets]) => Array.isArray(targets))
       .map(([pattern, targets]) => ({
         pattern,
-        targets: targets.filter((target): target is string => typeof target === 'string'),
+        targets: targets.filter((target) => typeof target === 'string'),
       }));
     return undefined;
   } catch (error) {
@@ -164,6 +154,7 @@ export function readManifest(rootPath: string, packageDir = '', tsconfigDir = pa
     pathMappings: [],
     baseUrl: '',
     verbatimModuleSyntax: false,
+    emitDecoratorMetadata: false,
     trustworthy: true,
   };
   const failure = readPackage(rootPath, packageDir, manifest) ?? readTsconfig(rootPath, tsconfigDir, manifest);

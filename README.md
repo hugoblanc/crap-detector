@@ -97,7 +97,8 @@ refactoring qui vaille : la complexité seule ne coûte rien si personne ne touc
 
 **Couplage caché.** Paires de fichiers qui changent toujours ensemble sans import entre eux.
 Aucun linter ni analyse statique ne voit ça, seulement l'historique.
-Une paire n'est pas cachée si deux imports au plus la relient (barrel, intermédiaire), ou si les deux fichiers importent un même module de types : au moins un type déclaré, aucune fonction.
+Une paire n'est pas cachée si deux imports au plus la relient (barrel, intermédiaire), ou si les deux fichiers importent un même module de types : au moins un type déclaré, et aucune valeur laissée à l'exécution.
+Un fichier qui exporte un schéma zod ou une table de constantes n'est donc pas un module de types : ses importeurs partagent du code, pas un contrat.
 Les fichiers supprimés depuis sont ignorés, les renommés suivis, et les commits de plus de 20 fichiers écartés.
 Sous 50 commits dans la fenêtre, le couplage n'est pas mesuré : les fichiers centraux d'un projet jeune changent ensemble par construction.
 
@@ -109,8 +110,8 @@ Quand knip a tourné, ses `unlisted-dependency` sur les fichiers que cette règl
 
 **Cycles et orphelins**, calculés sur le graphe d'imports interne (composantes fortement
 connexes, Tarjan itératif).
-Un cycle ne compte que s'il existe à l'exécution : les imports effacés à l'émission (`import type`, symboles utilisés seulement comme types, selon `verbatimModuleSyntax` du tsconfig le plus proche) et les `import()` dynamiques n'en créent pas.
-Les métadonnées de décorateurs (`emitDecoratorMetadata`) ne sont pas prises en compte.
+Un cycle ne compte que s'il existe à l'exécution : les imports effacés à l'émission (`import type`, symboles utilisés seulement comme types) et les `import()` dynamiques n'en créent pas.
+Ce qui s'efface dépend des options effectives du tsconfig le plus proche, chaîne `extends` suivie : avec `verbatimModuleSyntax` seul `import type` disparaît, et avec `emitDecoratorMetadata` le type d'un paramètre de constructeur décoré reste importé (`design:paramtypes`), donc deux services NestJS qui s'injectent mutuellement forment bien un cycle.
 Les orphelins ne sont comptés que si knip n'a pas tourné (`--no-tools`, ou knip absent) : `unused-file` couvre le même besoin, et knip connaît les points d'entrée par convention, comme les pages Next.js, que le graphe ne voit pas.
 Les tests restent hors mesure mais comptent alors comme importeurs : un module utilisé seulement par ses tests n'est pas orphelin.
 
