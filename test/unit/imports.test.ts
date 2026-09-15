@@ -23,7 +23,8 @@ import {
   readManifest,
   subprojectDirs,
 } from '../../src/imports/manifest.js';
-import { pnpmWorkspaceGlobs, stripYamlComment, vendoredSubprojects } from '../../src/imports/vendored.js';
+import { vendoredSubprojects } from '../../src/imports/vendored.js';
+import { pnpmWorkspaceGlobs, stripYamlComment } from '../../src/imports/workspaces.js';
 import type { Manifest } from '../../src/imports/manifest.js';
 import { ambientModulePatterns, specifierResolver } from '../../src/imports/resolve.js';
 import { analyzeImports, importFindings } from '../../src/imports/analyze.js';
@@ -738,6 +739,18 @@ describe('vendoredSubprojects', () => {
     expect(vendoredSubprojects(crlf, subprojectDirs(crlf, files), sources).dirs).toEqual([]);
   });
 
+  /**
+   * La négation est lue sans être appliquée : le motif positif protège encore src/vendor, que
+   * pnpm en retirerait. Sens conservateur assumé, un dossier mesuré de trop, jamais écarté à tort.
+   */
+  it('lit une négation pnpm sans désactiver la détection, et protège toujours le motif positif', () => {
+    const sources = makeProject({ 'src/app.ts': '', 'src/vendor/index.ts': '' });
+    const root = makeRoot({ ...VENDOR, 'pnpm-workspace.yaml': 'packages:\n  - \'src/*\'\n  - \'!src/vendor\'\n' });
+    const scan = vendoredSubprojects(root, subprojectDirs(root, files), sources);
+    expect(scan.unreadableReason).toBeUndefined();
+    expect(scan.dirs).toEqual([]);
+  });
+
   it('n’écarte rien et dit pourquoi quand la déclaration est illisible', () => {
     const sources = makeProject({ 'src/app.ts': '', 'src/vendor/index.ts': '' });
     const root = makeRoot({ ...VENDOR, 'pnpm-workspace.yaml': 'packages: [\n  "src/*",\n' });
@@ -787,6 +800,17 @@ describe('pnpmWorkspaceGlobs', () => {
     // Un item qui n'est pas un scalaire donnerait un glob qui ne matche rien, donc un espace
     // de travail écarté en silence : refusé.
     expect(pnpmWorkspaceGlobs('packages:\n  - path: apps/*\n').unreadable).toMatch(/forme inconnue/);
+  });
+
+  it('accepte la négation pnpm, et tout scalaire entre guillemets', () => {
+    expect(pnpmWorkspaceGlobs('packages:\n  - \'packages/*\'\n  - \'!**/test/**\'\n'))
+      .toEqual({ globs: ['packages/*', '!**/test/**'] });
+    expect(pnpmWorkspaceGlobs('packages: ["packages/*", "!**/test/**"]'))
+      .toEqual({ globs: ['packages/*', '!**/test/**'] });
+    // Entre guillemets, les deux-points ne construisent rien non plus.
+    expect(pnpmWorkspaceGlobs('packages:\n  - "apps/a:b/*"\n')).toEqual({ globs: ['apps/a:b/*'] });
+    // Le même point d'exclamation nu ouvre un tag : forme inconnue.
+    expect(pnpmWorkspaceGlobs('packages:\n  - !tag apps/*\n').unreadable).toMatch(/forme inconnue/);
   });
 
   it('refuse un scalaire plié ou littéral, dont la valeur est sur les lignes suivantes', () => {
