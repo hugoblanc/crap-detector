@@ -99,12 +99,21 @@ function unquote(value: string): string {
 }
 
 /**
- * Un item de `packages` est un glob, donc un scalaire. Tout ce qui ressemble à une structure
- * imbriquée est refusé plutôt que pris pour un glob qui ne matcherait jamais : un espace de
- * travail déclaré sortirait du périmètre sans que rien ne le dise.
+ * Indicateurs YAML qui ouvrent autre chose qu'un glob : scalaire plié ou littéral (`- >-`,
+ * `- |`, dont la valeur est sur les lignes suivantes), ancre, tag, directive. Volontairement
+ * sans `*` : `**\/pkg` est un glob légitime, et une ancre en valeur de `packages` est déjà
+ * refusée par pnpmWorkspaceGlobs, qui n'accepte que la séquence en bloc ou en flux.
+ */
+const YAML_INDICATOR = /^[>|&!%]/;
+
+/**
+ * Un item de `packages` est un glob, donc un scalaire d'une seule ligne. Tout ce qui ressemble
+ * à une structure imbriquée ou à un scalaire à continuer est refusé plutôt que pris pour un
+ * glob qui ne matcherait jamais : un espace de travail déclaré sortirait du périmètre sans que
+ * rien ne le dise.
  */
 function isPlainScalar(item: string): boolean {
-  return !/[:{}[\]]/.test(item);
+  return !/[:{}[\]]/.test(item) && !YAML_INDICATOR.test(item);
 }
 
 function itemsOrUnreadable(items: string[], form: string): WorkspaceDeclaration {
@@ -166,9 +175,13 @@ function blockSequence(lines: readonly string[]): WorkspaceDeclaration {
  * de fin de ligne compris. Ajouter un analyseur YAML pour un seul champ coûterait une
  * dépendance de plus à un CLI qui n'en a que trois ; tout ce qu'il ne sait pas lire est
  * signalé, jamais rendu comme une liste vide.
+ *
+ * Découpage sur `\r?\n` : un fichier en CRLF laissait sinon un `\r` en fin de ligne, que la
+ * regex d'item de blockSequence ne matche pas. Le lecteur sortait à la première ligne, rendait
+ * une liste vide sans rien signaler, et les espaces de travail déclarés sortaient du périmètre.
  */
 export function pnpmWorkspaceGlobs(raw: string): WorkspaceDeclaration {
-  const lines = raw.split('\n');
+  const lines = raw.split(/\r?\n/);
   const start = lines.findIndex((line) => /^packages\s*:/.test(line));
   const header = lines[start];
   if (start === -1 || header === undefined) return { globs: [] };

@@ -734,6 +734,8 @@ describe('vendoredSubprojects', () => {
     expect(vendoredSubprojects(pnpm, subprojectDirs(pnpm, files), sources).dirs).toEqual([]);
     const flow = makeRoot({ ...VENDOR, 'pnpm-workspace.yaml': 'packages: [\n  "src/*",\n]\n' });
     expect(vendoredSubprojects(flow, subprojectDirs(flow, files), sources).dirs).toEqual([]);
+    const crlf = makeRoot({ ...VENDOR, 'pnpm-workspace.yaml': 'packages:\r\n  - \'src/vendor\'\r\n' });
+    expect(vendoredSubprojects(crlf, subprojectDirs(crlf, files), sources).dirs).toEqual([]);
   });
 
   it('n’écarte rien et dit pourquoi quand la déclaration est illisible', () => {
@@ -785,6 +787,27 @@ describe('pnpmWorkspaceGlobs', () => {
     // Un item qui n'est pas un scalaire donnerait un glob qui ne matche rien, donc un espace
     // de travail écarté en silence : refusé.
     expect(pnpmWorkspaceGlobs('packages:\n  - path: apps/*\n').unreadable).toMatch(/forme inconnue/);
+  });
+
+  it('refuse un scalaire plié ou littéral, dont la valeur est sur les lignes suivantes', () => {
+    expect(pnpmWorkspaceGlobs('packages:\n  - >-\n    apps/*\n').unreadable).toMatch(/forme inconnue/);
+    expect(pnpmWorkspaceGlobs('packages:\n  - |\n    apps/*\n').unreadable).toMatch(/forme inconnue/);
+    expect(pnpmWorkspaceGlobs('packages:\n  - >\n    apps/*\n').unreadable).toMatch(/forme inconnue/);
+  });
+
+  /**
+   * Deux fixtures identiques dont seules les fins de ligne diffèrent. En CRLF, le `\r` final
+   * faisait échouer la regex d'item : liste vide, aucune raison d'illisibilité, et les espaces
+   * de travail déclarés sortaient du périmètre.
+   */
+  it('lit les deux fins de ligne, bloc comme flux', () => {
+    const block = 'packages:\n  - \'apps/*\' # le site\n  - libs/**\n';
+    const flow = 'packages: [\n  "apps/*",\n  libs/**,\n]\n';
+    const expected = { globs: ['apps/*', 'libs/**'] };
+    expect(pnpmWorkspaceGlobs(block)).toEqual(expected);
+    expect(pnpmWorkspaceGlobs(block.split('\n').join('\r\n'))).toEqual(expected);
+    expect(pnpmWorkspaceGlobs(flow)).toEqual(expected);
+    expect(pnpmWorkspaceGlobs(flow.split('\n').join('\r\n'))).toEqual(expected);
   });
 });
 

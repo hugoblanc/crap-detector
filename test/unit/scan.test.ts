@@ -352,6 +352,20 @@ describe('scanFull', () => {
     expect(report.filesScanned).toBe(3);
   });
 
+  /** Deux fixtures identiques dont seules les fins de ligne du pnpm-workspace.yaml diffèrent. */
+  it.each([['LF', '\n'], ['CRLF', '\r\n']])('respecte un espace de travail pnpm en %s', async (_form, eol) => {
+    const root = makeRoot({
+      ...PROJECT,
+      'pnpm-workspace.yaml': ['packages:', '  - \'src/vendor\'', ''].join(eol),
+      'src/vendor/package.json': JSON.stringify({ name: 'scraper', dependencies: { axios: '1.0.0' } }),
+      'src/vendor/scrape.ts': 'export function scrape(value: number): number { return value; }\n',
+    });
+    const report = await scanFull(root, config, { skipChurn: true, skipExternalTools: true });
+    expect(report.scope.vendored).toEqual([]);
+    expect(report.scope.vendoredUnreadableReason).toBeUndefined();
+    expect(report.filesScanned).toBe(3);
+  });
+
   it('écarte du périmètre un sous-projet que personne n’importe', async () => {
     const root = makeRoot({
       ...PROJECT,
