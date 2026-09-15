@@ -178,6 +178,9 @@ Rescan des cinq dépôts, alertes des huit règles concernées, et verdicts huma
 Sur l'échantillon vérifié à la main de ces huit règles, l'utilité passe de 28 % (76 utiles sur 268) à 35 % (73 sur 210).
 Une baseline écrite avant ce changement n'est plus comparable : la version du générateur entre dans le jugement de comparabilité, précisément parce qu'un projet aux seuils épinglés verrait sinon la chute des chiffres en amélioration.
 
+Chiffres repris après la fusion des règles d'imports et de code mort de l'itération suivante : les huit règles ci-dessus ont exactement la même population qu'avant cette fusion, qui ne touche ni les métriques ni les règles de catch.
+Sur l'ensemble des règles, les cinq dépôts passent de 6833 alertes à 6581 par cette fusion, puis à 5727 par les changements décrits ici.
+
 Les trois alertes utiles perdues :
 
 - une fonction de page dont la cyclomatique tenait aux valeurs par défaut du rendu ; `function-length` la signale toujours, à 276 lignes, et au-dessus du seuil de signalement.
