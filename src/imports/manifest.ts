@@ -29,6 +29,11 @@ export interface Manifest {
   /** compilerOptions.emitDecoratorMetadata : un type de paramètre décoré survit à l'émission. */
   emitDecoratorMetadata: boolean;
   /**
+   * Options effectives du tsconfig le plus proche, pour résoudre un specifier comme TypeScript
+   * le ferait ; absentes s'il n'y a pas de tsconfig ou s'il est illisible.
+   */
+  compilerOptions?: ts.CompilerOptions;
+  /**
    * false quand un fichier de config existe mais n'a pas pu être lu :
    * la détection de dépendances inconnues est alors désactivée.
    */
@@ -127,6 +132,7 @@ function readTsconfig(rootPath: string, dir: string, manifest: Manifest): string
     const options = effectiveCompilerOptions(configPath, configDir);
     manifest.verbatimModuleSyntax = options.verbatimModuleSyntax === true;
     manifest.emitDecoratorMetadata = options.emitDecoratorMetadata === true;
+    manifest.compilerOptions = options;
     const paths = options.paths;
     if (paths === undefined) return undefined;
     manifest.baseUrl = pathsBase(rootPath, configDir, options);

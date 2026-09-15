@@ -24,6 +24,7 @@ import {
 import { runtimeGraph } from './graph.js';
 import { inDir, isDeclared, manifestResolver, readManifest, typesPackageOf } from './manifest.js';
 import type { Manifest } from './manifest.js';
+import { specifierResolver } from './resolve.js';
 
 /** Extensions essayées quand un import relatif ne pointe pas sur un fichier du scope. */
 const ON_DISK_EXTENSIONS = [
@@ -59,6 +60,11 @@ export interface DependencyContext {
   manifestFor: (file: string) => Manifest;
   /** false si l'import disparaît une fois les types effacés ; coûte une transpilation par fichier. */
   isRuntimeImport: (file: string, specifier: string) => boolean;
+  /**
+   * true si le specifier mène quelque part : résolution TypeScript ou déclaration ambiante
+   * d'un paquet installé. Consultée avant d'affirmer qu'un paquet est introuvable.
+   */
+  resolvesSpecifier: (manifest: Manifest, file: string, specifier: string) => boolean;
 }
 
 export function dependencyContext(rootPath: string, sourceFiles: Map<string, SourceFile>): DependencyContext {
@@ -67,6 +73,7 @@ export function dependencyContext(rootPath: string, sourceFiles: Map<string, Sou
   return {
     rootPath,
     manifestFor,
+    resolvesSpecifier: specifierResolver(rootPath),
     isRuntimeImport: (file, specifier) => {
       const source = sourceFiles.get(file);
       if (source === undefined) return true;
@@ -105,6 +112,22 @@ function isResolvable(context: DependencyContext, file: string, specifier: strin
 }
 
 /**
+ * Ce qu'on peut affirmer d'un import non déclaré : installé, donc arrivé en transitif ;
+ * introuvable, donc probablement inventé ; ou rien, quand le specifier mène quand même
+ * quelque part : alias de framework, sous-module déclaré en ambiant, chemin du tsconfig.
+ * Une critique affirmée à tort coûte plus cher que le signal qu'elle apporte.
+ */
+function undeclaredKind(
+  context: DependencyContext,
+  manifest: Manifest,
+  file: string,
+  ref: ImportRef,
+): UndeclaredKind | undefined {
+  if (ref.specifierKind === 'bare' && isResolvable(context, file, ref.specifier)) return UNDECLARED.installed;
+  return context.resolvesSpecifier(manifest, file, ref.specifier) ? undefined : UNDECLARED.missing;
+}
+
+/**
  * Import de paquet non déclaré dans le package.json le plus proche du fichier. Un import de
  * types seuls couvert par un `@types/` déclaré ne charge rien à l'exécution : pas de finding.
  */
@@ -117,8 +140,8 @@ export function dependencyFinding(context: DependencyContext, file: string, ref:
   if (isDeclared(manifest, ref.specifier, packageName)) return undefined;
   const typesDeclared = manifest.dependencies.has(typesPackageOf(packageName));
   if (typesDeclared && !context.isRuntimeImport(file, ref.specifier)) return undefined;
-  const installed = ref.specifierKind === 'bare' && isResolvable(context, file, ref.specifier);
-  const kind = UNDECLARED[installed ? 'installed' : 'missing'];
+  const kind = undeclaredKind(context, manifest, file, ref);
+  if (kind === undefined) return undefined;
   return makeFinding({
     tool: 'imports',
     rule: kind.rule,

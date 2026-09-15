@@ -23,6 +23,7 @@ import {
   readManifest,
 } from '../../src/imports/manifest.js';
 import type { Manifest } from '../../src/imports/manifest.js';
+import { ambientModulePatterns, specifierResolver } from '../../src/imports/resolve.js';
 import { analyzeImports, importFindings } from '../../src/imports/analyze.js';
 import type { DependencyContext } from '../../src/imports/analyze.js';
 
@@ -365,6 +366,33 @@ describe('isDeclared', () => {
   });
 });
 
+describe('ambientModulePatterns', () => {
+  const base: Manifest = {
+    dir: '',
+    dependencies: new Set(['racine']),
+    subpathImports: [],
+    pathAliases: [],
+    pathMappings: [],
+    baseUrl: '',
+    verbatimModuleSyntax: false,
+    emitDecoratorMetadata: false,
+    trustworthy: true,
+  };
+
+  it('suit les dépendances transitives et lit le champ exports', () => {
+    const root = makeRoot({
+      'node_modules/racine/package.json': '{"name":"racine","dependencies":{"feuille":"1.0.0"}}',
+      'node_modules/feuille/package.json': '{"name":"feuille","exports":{".":{"types":"./dist/index.d.ts"}}}',
+      'node_modules/feuille/dist/index.d.ts': "declare module '@alias/Chose' {}\n",
+    });
+    expect(ambientModulePatterns(root, base)).toEqual(['@alias/Chose']);
+  });
+
+  it('rend une liste vide quand rien n’est installé', () => {
+    expect(ambientModulePatterns(makeRoot({ 'package.json': '{}' }), base)).toEqual([]);
+  });
+});
+
 describe('importFindings', () => {
   const manifest: Manifest = {
     dir: '',
@@ -379,7 +407,12 @@ describe('importFindings', () => {
   };
 
   function context(rootPath: string, governing: Manifest = manifest): DependencyContext {
-    return { rootPath, manifestFor: () => governing, isRuntimeImport: () => true };
+    return {
+      rootPath,
+      manifestFor: () => governing,
+      isRuntimeImport: () => true,
+      resolvesSpecifier: specifierResolver(rootPath),
+    };
   }
 
   function refs(...entries: Array<[string, ImportRef['specifierKind']]>): ImportRef[] {
@@ -445,6 +478,25 @@ describe('importFindings', () => {
       new Map([['src/a.ts', refs(['ts-morph', 'bare'], ['node:fs', 'builtin'], ['/abs', 'absolute'])]]),
     );
     expect(findings).toEqual([]);
+  });
+
+  it('se tait sur un alias de framework déclaré en ambiant par un paquet installé', () => {
+    // Cas Docusaurus : '@theme/Heading' n'est pas un paquet npm, il est déclaré par le thème,
+    // que le site n'installe que par son preset.
+    const root = makeRoot({
+      'package.json': '{"dependencies":{"preset":"1.0.0"}}',
+      'node_modules/preset/package.json': '{"name":"preset","dependencies":{"theme":"1.0.0"}}',
+      'node_modules/theme/package.json': '{"name":"theme","types":"theme.d.ts"}',
+      'node_modules/theme/theme.d.ts': "declare module '@theme/Heading' { const H: unknown; export default H; }\n"
+        + "declare module '@theme-original/*';\n",
+      'src/a.ts': '',
+    });
+    const governing = { ...manifest, dependencies: new Set(['preset']) };
+    const findings = importFindings(
+      context(root, governing),
+      new Map([['src/a.ts', refs(['@theme/Heading', 'bare'], ['@theme-original/Footer', 'bare'], ['left-pad', 'bare'])]]),
+    );
+    expect(findings.map((finding) => finding.symbol)).toEqual(['left-pad']);
   });
 
   it('se tait entièrement quand le manifeste n’est pas fiable', () => {
