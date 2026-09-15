@@ -81,9 +81,10 @@ C'est la contrainte qui structure tout le code.
 **Complexité par fonction.** Cyclomatique (McCabe) et cognitive (spec Sonar v1.7,
 implémentée d'après le white paper et testée sur ses exemples publiés), longueur,
 paramètres, profondeur d'imbrication, callbacks imbriqués.
-La cyclomatique ne compte un `&&`, un `||` ou un `??` que s'il pilote le flux — condition
+La cyclomatique ne compte un `&&`, un `||` ou un `??` que s'il pilote le flux : condition
 de `if`, de boucle, de ternaire, ou expression prise comme instruction. `a ?? défaut` et
 `x || 0` produisent une valeur, pas une branche à suivre.
+`x ||= f()`, `x &&= f()` et `x ??= f()` pris comme instruction comptent : l'appel n'a lieu que parfois.
 
 **Érosion** (SlopCodeBench). Part de la masse de complexité concentrée dans les fonctions
 au-delà du seuil cyclomatique, avec `mass(f) = CC(f) × √SLOC(f)`.
@@ -95,8 +96,9 @@ agentiques, contre 80 % pour l'érosion : c'est le signal le plus fréquent des 
 
 **Signatures d'AI slop.** `catch` vide ou qui ne fait que logger (error-masking, +47 %
 chez GitClear), quand le `try` attend une opération asynchrone : c'est là qu'un échec
-réseau ou base disparaît sans trace. Un repli synchrone — `JSON.parse`, écriture
-`localStorage`, sélecteur invalide — n'est pas signalé, il est presque toujours voulu.
+réseau ou base disparaît sans trace. Un repli synchrone, `JSON.parse`, écriture
+`localStorage`, sélecteur invalide, n'est pas signalé, il est presque toujours voulu.
+La contrepartie est connue : un `readFileSync`, un `execSync` ou un pilote de base synchrone avalés ne sont plus signalés non plus, et sur un outillage en ligne de commande cette famille existe.
 `else` redondant, variable assignée puis retournée, ternaire booléen et wrapper qui transmet ses paramètres à l'identique sont désactivés par défaut, voir [Règles par défaut](#règles-par-défaut).
 
 **Échappements de typage.** `any` explicite, `as unknown as`, `@ts-ignore`, `@ts-nocheck`.
@@ -270,9 +272,12 @@ Cinq règles la gardent honnête :
 - Les clés de dette portent leur outil, donc `check --no-tools` ignore les entrées de
   `knip` au lieu de les compter comme corrigées.
   Les orphelins, mesurés seulement sans knip, ne sont comparés que si les deux scans les ont mesurés.
-- Un changement de seuil, de périmètre ou de version d'outil rend la baseline
+- Un changement de version de crap-detector, de seuil, de périmètre ou de version d'outil rend la baseline
   incomparable : le gate échoue en demandant un nouveau snapshot, parce que ces chiffres
-  ne sont réellement pas comparables. Le périmètre inclut le filtrage git : une baseline
+  ne sont réellement pas comparables.
+  La version du générateur compte autant que les seuils : une définition de métrique qui change fait bouger les chiffres à seuil constant.
+  Sans elle, un projet qui a épinglé ses seuils verrait une cyclomatique tombée de 17 à 5 s'afficher en amélioration, et son plancher de cliquet resterait à 17.
+ Le périmètre inclut le filtrage git : une baseline
   écrite sans lui (hors dépôt, ou avant qu'il existe) ne se compare pas à un scan qui l'applique.
   Il inclut aussi la restriction de `knip` et `jscpd` au périmètre : une baseline écrite quand ils comptaient hors périmètre ne se compare pas non plus.
   De même pour une baseline écrite avant les règles d'imports actuelles (`importRules`) : ses faux positifs de dépendances laisseraient de la marge à un vrai paquet inventé.

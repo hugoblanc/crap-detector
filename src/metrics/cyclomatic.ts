@@ -8,6 +8,10 @@
  * par défaut n'est pas une branche que le lecteur doit suivre. Mesuré sur cinq
  * dépôts (docs/PRECISION-2026-09.md), ces opérateurs de valeur portaient 42 % des
  * alertes de la règle, dont aucune n'était jugée utile à corriger.
+ *
+ * `x ||= f()`, `x &&= f()`, `x ??= f()` pris comme instruction comptent, eux : l'appel
+ * n'a lieu que parfois. L'ancien calcul les ratait, comparant le texte de l'opérateur
+ * aux seuls `&&`, `||` et `??`.
  */
 import { Node } from 'ts-morph';
 import type { BinaryExpression, Node as TsNode } from 'ts-morph';
@@ -41,10 +45,27 @@ export function cyclomaticComplexity(fn: FunctionLikeNode): number {
   return score;
 }
 
+/** Court-circuits, et leurs formes d'affectation : `x ||= f()` n'appelle f que parfois. */
+const SHORT_CIRCUIT = new Set(['&&', '||', '??']);
+const SHORT_CIRCUIT_ASSIGNMENT = new Set(['&&=', '||=', '??=']);
+
+function operatorOf(node: TsNode): string | undefined {
+  return Node.isBinaryExpression(node) ? node.getOperatorToken().getText() : undefined;
+}
+
 function isLogicalOperator(node: TsNode): node is BinaryExpression {
-  if (!Node.isBinaryExpression(node)) return false;
-  const operator = node.getOperatorToken().getText();
-  return operator === '&&' || operator === '||' || operator === '??';
+  const operator = operatorOf(node);
+  return operator !== undefined
+    && (SHORT_CIRCUIT.has(operator) || SHORT_CIRCUIT_ASSIGNMENT.has(operator));
+}
+
+/**
+ * Seuls les court-circuits se chaînent : dans `x ||= a && b`, le `&&` produit la valeur
+ * affectée, il ne prend pas la position de l'affectation.
+ */
+function isChainedOperand(node: TsNode): boolean {
+  const operator = operatorOf(node);
+  return operator !== undefined && SHORT_CIRCUIT.has(operator);
 }
 
 /**
@@ -61,7 +82,7 @@ function drivesControlFlow(node: BinaryExpression): boolean {
     if (
       Node.isParenthesizedExpression(parent)
       || Node.isPrefixUnaryExpression(parent)
-      || isLogicalOperator(parent)
+      || isChainedOperand(parent)
     ) {
       current = parent;
       parent = parent.getParent();

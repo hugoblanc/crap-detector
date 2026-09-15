@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultScope, defaultThresholds } from '../../src/core/config.js';
 import { makeFinding } from '../../src/core/findings.js';
+import { appVersion } from '../../src/core/version.js';
 import type { Aggregates, Baseline, Finding, ScanReport } from '../../src/core/types.js';
 import {
   BASELINE_FILENAME,
@@ -277,6 +278,25 @@ describe('incompatibilityReason', () => {
   it('refuse une baseline d’une autre version de format', () => {
     expect(incompatibilityReason({ ...baseline, version: 1 as 2 }, report({ withKnip: true })))
       .toMatch(/version 1/);
+  });
+
+  it('accepte une baseline écrite par la version du générateur qui tourne', () => {
+    expect(baseline.generator.version).toBe(appVersion());
+    expect(incompatibilityReason(baseline, report({ withKnip: true }))).toBeUndefined();
+  });
+
+  /**
+   * Sans cette comparaison, un projet qui a épinglé ses seuils garderait une baseline
+   * déclarée comparable à travers un changement de définition de métrique : la chute
+   * des chiffres passerait pour une amélioration, et le plancher du cliquet resterait
+   * à l'ancienne valeur.
+   */
+  it('refuse une baseline écrite par une autre version du générateur, à seuils identiques', () => {
+    const older = { ...baseline, generator: { ...baseline.generator, version: '0.1.0' } };
+    const reason = incompatibilityReason(older, report({ withKnip: true }));
+    expect(reason).toMatch(/0\.1\.0/);
+    expect(reason).toMatch(new RegExp(appVersion().replace(/\./g, '\\.')));
+    expect(reason).toMatch(/refaire la baseline/);
   });
 });
 

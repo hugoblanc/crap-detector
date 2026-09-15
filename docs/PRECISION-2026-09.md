@@ -146,6 +146,10 @@ Chaque `??` et chaque `||` valait un point, alors qu'une valeur par défaut n'es
 Un opérateur logique n'est désormais compté que s'il pilote le flux : condition de `if`, de boucle, de ternaire, ou expression prise comme instruction (`prêt && envoyer()`).
 Sur les cinq dépôts, 42 % des alertes de la règle tenaient à des opérateurs de valeur.
 
+Les affectations court-circuitées `x ||= f()`, `x &&= f()`, `x ??= f()` prises comme instruction comptent désormais, elles : l'appel n'a lieu que parfois.
+L'ancien calcul les ratait toutes, comparant le texte de l'opérateur aux seuls `&&`, `||` et `??`.
+Effet mesuré : 6 fonctions gagnent 7 points au total sur les cinq dépôts, et une seule alerte apparaît, à 11 pour un seuil de 10.
+
 ### Les seuils frôlés
 
 Sur les alertes classées inutiles, une part notable est à un cran du seuil : 302 lignes contre 300, 51 contre 50, complexité cognitive 16 contre 15.
@@ -161,7 +165,7 @@ Rescan des cinq dépôts, alertes des huit règles concernées, et verdicts huma
 
 | Règle | Alertes avant | Après | Échantillon : utiles perdues | inutiles retirées |
 | --- | --- | --- | --- | --- |
-| cyclomatic-complexity | 965 | 556 | 2 | 14 |
+| cyclomatic-complexity | 965 | 557 | 2 | 14 |
 | cognitive-complexity | 744 | 612 | 0 | 7 |
 | function-length | 1734 | 1511 | 0 | 9 |
 | file-length | 330 | 285 | 0 | 8 |
@@ -169,13 +173,15 @@ Rescan des cinq dépôts, alertes des huit règles concernées, et verdicts huma
 | too-many-params | 114 | 114 | 0 | 0 |
 | empty-catch | 80 | 36 | 0 | 16 |
 | console-only-catch | 11 | 9 | 1 | 1 |
-| **total** | **4328** | **3473** | **3** | **55** |
+| **total** | **4328** | **3474** | **3** | **55** |
 
 Sur l'échantillon vérifié à la main de ces huit règles, l'utilité passe de 28 % (76 utiles sur 268) à 35 % (73 sur 210).
+Une baseline écrite avant ce changement n'est plus comparable : la version du générateur entre dans le jugement de comparabilité, précisément parce qu'un projet aux seuils épinglés verrait sinon la chute des chiffres en amélioration.
 
 Les trois alertes utiles perdues :
 
-- une fonction de page dont la cyclomatique tenait aux valeurs par défaut du rendu ; `function-length` la signale toujours, à 276 lignes, et au-dessus du seuil de signalement ;
+- une fonction de page dont la cyclomatique tenait aux valeurs par défaut du rendu ; `function-length` la signale toujours, à 276 lignes, et au-dessus du seuil de signalement.
+  Sa `cognitive-complexity` vaut 18 pour un seuil qui vient de passer à 17 : une marge arrondie à 18 au lieu de 17 rendrait cette perte sèche, à ne pas arrondir vers le haut sans le savoir ;
 - un comparateur de tri dont la cyclomatique tombe de 16 à 8 une fois les `|| 0` retirés ; `cognitive-complexity` signale toujours la méthode qui le contient, à 23 ;
 - un `catch` de constructeur qui logue une chaîne d'accès de propriétés en échec, sans opération asynchrone : le défaut réel, un objet à moitié construit rendu sans erreur, n'est pas ce que la règle mesure, et rien ne le signale plus.
 
@@ -183,6 +189,10 @@ Les trois alertes utiles perdues :
 
 ### Ce qui reste ouvert
 
+- Le critère asynchrone laisse passer toute une famille, absente de l'échantillon : le repli synchrone qui avale une erreur d'infrastructure.
+  Lecture de configuration par `readFileSync`, écriture d'un fichier d'audit par `writeFileSync`, `execSync` d'une migration, insertion par un pilote de base synchrone : construits en fixture, aucun de ces cas n'est plus signalé, et ce sont exactement les erreurs que visait l'issue #16.
+  Les cinq dépôts mesurés sont des applications web et des API, où l'entrée-sortie est asynchrone ; la classe de code où cette famille vit, outillage en ligne de commande et scripts de build, n'y est pas représentée.
+  Aucun des 46 blocs `catch` que le changement fait taire ne porte de marqueur d'entrée-sortie synchrone : le critère n'est donc pas réfuté par la mesure, il n'est pas non plus vérifié sur cette classe de dépôts.
 - Le cas « l'échec est déjà traité après le `try` » n'est pas détecté : deux alertes de `console-only-catch` portent sur un envoi d'e-mail dont l'échec est marqué en base juste après le bloc.
 - Les `catch` de scripts ponctuels et d'évaluations comptent comme ceux du code de production : quatre alertes restantes en viennent.
 - Les seuils de `nesting-depth` et `too-many-params` restent les plus bruyants des règles de taille, à 21 % et 24 % d'utilité, sans correctif dans cette itération.

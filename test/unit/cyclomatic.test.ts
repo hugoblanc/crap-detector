@@ -85,6 +85,20 @@ describe('cyclomaticComplexity', () => {
     expect(complexityOf(code, 'defaults')).toBe(1);
   });
 
+  it('ne compte pas un court-circuit dont le résultat est retourné', () => {
+    // Choix assumé : `return a && b()` rend une valeur à l’appelant, il ne branche pas
+    // le flux local. Mesuré sur cinq dépôts, la variante inverse ne fait franchir le
+    // seuil qu’à 5 fonctions sur ~19 000, dont un prédicat plat de douze vérifications
+    // de champs — le bruit que la règle vise.
+    const code = [
+      'declare function b(): boolean;',
+      'function garde(a: boolean): boolean {',
+      '  return a && b();',
+      '}',
+    ].join('\n');
+    expect(complexityOf(code, 'garde')).toBe(1);
+  });
+
   it('compte un opérateur logique pris comme instruction : il décide de l’appel', () => {
     const code = [
       'declare function work(): void;',
@@ -94,6 +108,28 @@ describe('cyclomaticComplexity', () => {
       '}',
     ].join('\n');
     expect(complexityOf(code, 'shortCircuit')).toBe(3);
+  });
+
+  it('compte une affectation court-circuitée prise comme instruction', () => {
+    const code = [
+      'declare function charger(): number;',
+      'function memoise(cache: { valeur?: number; actif: boolean }): void {',
+      '  cache.valeur ||= charger();',
+      '  cache.valeur ??= charger();',
+      '  cache.actif &&= true;',
+      '}',
+    ].join('\n');
+    expect(complexityOf(code, 'memoise')).toBe(4);
+  });
+
+  it('ne compte pas un court-circuit dont l’affectation prend la valeur', () => {
+    const code = [
+      'function affecte(cible: { v: boolean }, a: boolean, b: boolean): void {',
+      '  cible.v ||= a && b;',
+      '}',
+    ].join('\n');
+    // 1 + le ||= pris comme instruction ; le && ne fait que produire la valeur affectée
+    expect(complexityOf(code, 'affecte')).toBe(2);
   });
 
   it('mesure les fonctions imbriquées séparément, pas dans leur parent', () => {

@@ -151,13 +151,25 @@ export function makeBaseline(report: ScanReport): Baseline {
 }
 
 /**
- * Une baseline n'est comparable que si les seuils, le périmètre et les versions
- * d'outils sont identiques. Comparer à travers un changement de seuil ferait
+ * Une baseline n'est comparable que si la version du générateur, les seuils, le périmètre
+ * et les versions d'outils sont identiques. Comparer à travers un changement de seuil ferait
  * passer pour une régression ce qui n'est qu'un changement de règle du jeu.
+ *
+ * La version du générateur compte autant que les seuils : une définition de métrique qui
+ * change fait bouger les chiffres à seuil constant, et un projet qui a épinglé ses seuils
+ * dans `crap-detector.json` ne verrait rien. Une cyclomatique qui tombe de 17 à 5 parce
+ * qu'on ne compte plus les valeurs par défaut s'afficherait en amélioration, et le plancher
+ * du cliquet resterait à 17 : douze points de mou où une vraie complexité passe sans rien
+ * déclencher.
  */
 export function incompatibilityReason(baseline: Baseline, report: ScanReport): string | undefined {
   if (baseline.version !== 2) {
     return `baseline en version ${String(baseline.version)}, attendu 2 : refaire la baseline`;
+  }
+  const generated = baseline.generator.version;
+  const running = appVersion();
+  if (generated !== running) {
+    return `baseline écrite par crap-detector ${generated}, exécuté en ${running} : ce qui est mesuré a pu changer, refaire la baseline`;
   }
   const previousThresholds: Record<string, unknown> = { ...baseline.thresholds };
   for (const [key, value] of Object.entries(report.thresholds)) {

@@ -92,19 +92,28 @@ function isConsoleCall(statement: TsNode): boolean {
 /**
  * Le try attend-il une opération asynchrone ?
  *
- * Mesuré sur cinq dépôts (docs/PRECISION-2026-09.md), le fait qu'un bloc catch soit vide
- * ne dit rien du risque : écriture `localStorage` en navigation privée, `JSON.parse` d'une
- * trame tierce, sélecteur CSS invalide, tout cela est avalé exprès et sans conséquence.
+ * Sur les cinq dépôts mesurés (docs/PRECISION-2026-09.md), le fait qu'un bloc catch soit
+ * vide ne disait rien du risque : écriture `localStorage` en navigation privée, `JSON.parse`
+ * d'une trame tierce, sélecteur CSS invalide, tout cela est avalé exprès et sans conséquence.
  * Les seules alertes jugées utiles portaient sur un échec d'appel réseau ou d'écriture en
- * base perdu en silence. L'attente d'une promesse est la marque observable de ce
- * franchissement de frontière — un commentaire de justification, lui, ne discrimine rien :
- * les trois alertes utiles en portaient un.
+ * base perdu en silence. L'attente d'une promesse est prise comme indice de ce franchissement
+ * de frontière — un commentaire de justification, lui, ne discrimine rien : les trois alertes
+ * utiles en portaient un.
+ *
+ * Indice, pas critère établi : les cinq dépôts sont des applications web et des API, où
+ * l'entrée-sortie est asynchrone. Un repli synchrone avalé — `readFileSync` de configuration,
+ * `writeFileSync` d'audit, `execSync` de migration, pilote de base synchrone — perd
+ * exactement l'erreur d'infrastructure que la règle vise, et n'est plus signalé. Cette
+ * famille vit dans l'outillage en ligne de commande et les scripts de build, absents de
+ * l'échantillon : le critère n'y est ni réfuté ni vérifié.
  *
  * Une fonction imbriquée dans le try est ignorée : son rejet ne remonte pas à ce catch.
+ * `yield*` compte : la délégation propage le rejet du générateur délégué jusqu'ici.
  */
 function awaitsWork(clause: CatchClause): boolean {
   const tryStatement = clause.getParent();
   if (!Node.isTryStatement(tryStatement)) return false;
+  const delegating = inAsyncFunction(tryStatement);
   let found = false;
   const visit = (node: TsNode): void => {
     if (found || isFunctionLike(node)) return;
@@ -116,10 +125,24 @@ function awaitsWork(clause: CatchClause): boolean {
       found = true;
       return;
     }
+    if (delegating && Node.isYieldExpression(node) && node.getAsteriskToken() !== undefined) {
+      found = true;
+      return;
+    }
     node.forEachChild(visit);
   };
   visit(tryStatement.getTryBlock());
   return found;
+}
+
+/** Fonction englobante déclarée async : ce qu'elle délègue par `yield*` est asynchrone. */
+function inAsyncFunction(node: TsNode): boolean {
+  let current: TsNode | undefined = node.getParent();
+  while (current !== undefined) {
+    if (isFunctionLike(current)) return Node.isAsyncable(current) && current.isAsync();
+    current = current.getParent();
+  }
+  return false;
 }
 
 /** Un catch vide ou qui se contente de logger masque l'erreur au lieu de la traiter. */

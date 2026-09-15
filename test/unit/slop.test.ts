@@ -57,6 +57,16 @@ describe('catch masquant l’erreur', () => {
     expect(rulesOf(code)).toEqual(['empty-catch']);
   });
 
+  it('signale un catch vide sur une délégation yield* d’un générateur asynchrone', () => {
+    const code = [
+      'declare function flux(): AsyncGenerator<string>;',
+      'export async function* run(): AsyncGenerator<string> {',
+      '  try { yield* flux(); } catch {}',
+      '}',
+    ].join('\n');
+    expect(rulesOf(code)).toEqual(['empty-catch']);
+  });
+
   it('laisse passer un catch qui relance ou traite', () => {
     const code = [
       'declare function work(): Promise<void>;',

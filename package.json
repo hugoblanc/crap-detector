@@ -1,6 +1,6 @@
 {
   "name": "crap-detector",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Detection deterministe de la degradation de code TypeScript : metriques AST, hotspots, duplication, code mort, cycles, baseline/ratchet.",
   "type": "module",
   "license": "MIT",
