@@ -67,6 +67,16 @@ describe('catch masquant l’erreur', () => {
     expect(rulesOf(code)).toEqual(['empty-catch']);
   });
 
+  it('se tait sur un yield* d’un générateur synchrone : rien n’est attendu', () => {
+    const code = [
+      'declare function flux(): Generator<string>;',
+      'export function* run(): Generator<string> {',
+      '  try { yield* flux(); } catch {}',
+      '}',
+    ].join('\n');
+    expect(rulesOf(code)).toEqual([]);
+  });
+
   it('laisse passer un catch qui relance ou traite', () => {
     const code = [
       'declare function work(): Promise<void>;',

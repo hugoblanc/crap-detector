@@ -277,8 +277,7 @@ Cinq règles la gardent honnête :
   ne sont réellement pas comparables.
   La version du générateur compte autant que les seuils : une définition de métrique qui change fait bouger les chiffres à seuil constant.
   Sans elle, un projet qui a épinglé ses seuils verrait une cyclomatique tombée de 17 à 5 s'afficher en amélioration, et son plancher de cliquet resterait à 17.
- Le périmètre inclut le filtrage git : une baseline
-  écrite sans lui (hors dépôt, ou avant qu'il existe) ne se compare pas à un scan qui l'applique.
+  Le périmètre inclut le filtrage git : une baseline écrite sans lui (hors dépôt, ou avant qu'il existe) ne se compare pas à un scan qui l'applique.
   Il inclut aussi la restriction de `knip` et `jscpd` au périmètre : une baseline écrite quand ils comptaient hors périmètre ne se compare pas non plus.
   De même pour une baseline écrite avant les règles d'imports actuelles (`importRules`) : ses faux positifs de dépendances laisseraient de la marge à un vrai paquet inventé.
   De même quand les règles optionnelles activées diffèrent (`rules`), ou pour une baseline écrite avant leur sélection, qui les comptait toutes.

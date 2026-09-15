@@ -406,6 +406,9 @@ export function readBaseline(path: string): Baseline {
   const baseline = parsed as Partial<Baseline>;
   if (
     baseline.version !== 2
+    // Lu par incompatibilityReason : sans ce contrôle, un fichier tronqué plante au lieu
+    // de renvoyer sur `crap-detector baseline`.
+    || typeof baseline.generator?.version !== 'string'
     || typeof baseline.debtCounts !== 'object'
     || typeof baseline.debtMaxima !== 'object'
   ) {

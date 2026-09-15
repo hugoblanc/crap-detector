@@ -608,6 +608,20 @@ describe('lecture et écriture', () => {
     expect(() => readBaseline(path)).toThrow(/baseline crap-detector valide/);
   });
 
+  /**
+   * incompatibilityReason lit `generator.version` : sans ce refus à la lecture, une
+   * baseline tronquée planterait au déréférencement au lieu de renvoyer vers
+   * `crap-detector baseline`.
+   */
+  it('refuse une baseline de version 2 privée de son champ generator', () => {
+    const dir = tempDir();
+    const path = join(dir, BASELINE_FILENAME);
+    const { generator, ...sansGenerateur } = makeBaseline(report());
+    expect(generator.version).toBe(appVersion());
+    writeFileSync(path, JSON.stringify(sansGenerateur), 'utf8');
+    expect(() => readBaseline(path)).toThrow(/baseline crap-detector valide/);
+  });
+
   it('refuse un JSON qui n’est pas un objet', () => {
     const dir = tempDir();
     const path = join(dir, 'liste.json');
